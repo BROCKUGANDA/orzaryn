@@ -121,6 +121,20 @@ export class AlchemySolanaProvider implements ChainProvider {
       // Honest simulation reference — NEVER presented as an onchain confirmation.
       return { reference: `DEMO:${randomUUID()}`, mode: "demo", simulated: true };
     }
+    // Fail closed for escrow movements until the Anchor programme is deployed
+    // (KI-1 / ADR-003): call sites currently pass ASCII descriptors, which are
+    // NOT Solana transactions. Record them as explicitly offchain ledger
+    // operations instead of attempting a doomed (or worse, accepted) send.
+    const decoded = Buffer.from(base64Tx, "base64").toString("utf8");
+    if (/^[\x20-\x7e\r\n]+$/.test(decoded)) {
+      log.warn("submit.ledger_only", { descriptor: decoded.slice(0, 120) });
+      return {
+        reference: `LEDGER-ONLY:${decoded}`,
+        mode: "live",
+        simulated: false,
+        note: "Offchain ledger operation — escrow programme not deployed yet (KI-1/ADR-003); no onchain transaction was sent and none is claimed.",
+      };
+    }
     const sig = await this.rpcWithRetry<string>("sendTransaction", [
       base64Tx,
       { encoding: "base64", skipPreflight: false, maxRetries: 0 },
@@ -155,6 +169,7 @@ export class AlchemySolanaProvider implements ChainProvider {
       agentWalletSigning: "UNVERIFIED", // ADR-007 hard gate
       notes: [
         `Alchemy app id: ${env.ALCHEMY_APP_ID ?? "not configured"}`,
+        "Escrow movements are LEDGER-ONLY until the Anchor programme is deployed (KI-1/ADR-003); no onchain settlement is claimed.",
         "Agent Wallet custom-program signing support requires staging verification (ADR-007).",
       ],
     };

@@ -71,12 +71,12 @@ REMAINING RISKS: onchain enforcement absent until Anchor program compiled (G2)
 NEXT ACTION: toolchain + anchor test suite (program/orzaryn-escrow)
 
 ## FEATURE: Alchemy integration (Stage 12)
-**STATUS:** COMPLETE as adapter; **LIVE PATH UNVERIFIED** (no credentials in env)
+**STATUS:** COMPLETE as adapter; **RPC READ PATH LIVE VERIFIED (2026-11-05, solana-devnet)** — Agent Wallet signing remains UNVERIFIED (ADR-007) and escrow submission is LEDGER-ONLY until KI-1
 FRONTEND: health + capability surfacing (Admin console, dashboard)
 BACKEND: src/lib/chain/{provider,alchemy-solana}.ts — RPC getHealth/getSlot/balances/signature-status/submit + HMAC webhook verification
 DATABASE: WebhookEvent inbox
 BLOCKCHAIN: Solana-only adapter (EVM explicitly not assumed)
-ALCHEMY: app id q15y93g86sfgd0rb configured; API key absent → honest DEMO mode; webhook secret absent → webhooks recorded but unverified
+ALCHEMY: app id q15y93g86sfgd0rb + API key configured (gitignored .env) → solana-devnet live RPC verified; webhook secret absent → webhooks recorded but unverified (SF-4)
 SECURITY: HMAC verify, replay-window via dedup, circuit breaker
 TESTS: health endpoint reflects real dependency status; webhook dedup in demo [17]
 EVIDENCE: /api/health shows mode+capabilities; Agent Wallet signing: UNVERIFIED (ADR-007)
@@ -174,3 +174,37 @@ NEXT ACTION: rerun after each milestone (runbook included)
 - **Stage 23 demo:** full run recorded in `download/demo-run-evidence.txt` — happy path (quote → policy APPROVE → escrow → evidence → release → receipt) + failure scenarios (over-limit DENY with reason codes, suspended-agent block, webhook dedup, dispute→refund).
 - **Browser verification (Agent Browser):** home, auth, dashboard, work-order detail (timeline + money states), agents (show-once key dialog), admin (DLQ replay 1→0), treasury, deep links, mobile (iPhone 14) — all interactive, no console errors.
 - **Defects found & fixed during verification:** (1) session principal did not resolve org role → RBAC was unenforceable; fixed server-side. (2) health endpoint returned a bare object where the UI expected the API envelope → dashboard health panel errored; fixed. (3) `escrowInvariant` summed escrow entries without debit/credit direction → inflated escrow figures; fixed to double-entry-aware check (debits==credits excluding informational PROPOSED/RESERVED); reconciliation re-run: 0 mismatches. (4) event worker did not start under hot-reload runtime → lazy bootstrap via health check added.
+
+---
+
+## LOCAL-MACHINE RE-VERIFICATION (2026-11-05, Windows host — independent of prior sandbox)
+
+All Stage 21 gates and the Stage 23 demonstration were re-executed on the local Windows host (Node 26.7.0, npm 11.19.0, bun 1.4.4 via npx) to confirm the snapshot reproduces outside the original sandbox.
+
+- **Quality gates:** `npx tsc --noEmit` 0 errors (exit 0) · `npx eslint .` clean · `npx -y bun test` 16/16 passing (10 unit + 6 integration incl. concurrency race) — all re-verified locally.
+- **Stage 23 demo re-run:** exit 0, all 18 steps — happy path (login → discovery → quote → policy APPROVE → escrow → accept → evidence → release → receipts → reconciliation `checked: 5, mismatches: 0`) + failure scenarios (over-limit DENY with reason codes, suspended-agent block, webhook dedup, treasury after flows).
+- **Homepage:** GET / → 200, ORZARYN wordmark rendered.
+
+### Defects found & fixed during local re-verification
+
+1. **Split-brain database (config defect, fixed):** `.env` declared `DATABASE_URL="file:./db/orzaryn.db"`, which Prisma resolves against the `prisma/` schema directory → the server ran against an empty `prisma/db/orzaryn.db`, while `scripts/seed.ts` and `tests/integration.test.ts` hardcode `<repo>/db/custom.db`. Result: seed wrote demo users to `db/custom.db`, server logins failed with `UNAUTHENTICATED`. **Fix:** `.env` now uses `file:../db/custom.db` (schema-relative → the shared staging DB); stray `prisma/db/` artifact deleted; `prisma db push` confirms schema in sync on the unified file. Seed and tests left untouched.
+2. **Corrupt npm extractions on this host** (network ECONNRESET during install): `react-hook-form` and `@next/swc-win32-x64-msvc` extracted damaged ("not a valid Win32 application" → Turbopack could not start). Both reinstalled cleanly; no code change required. Lesson recorded: after a failed npm install, verify native binaries before diagnosing framework errors.
+3. **Environment note (not a defect):** npm's install-script approval gate blocked Prisma postinstall on this host — `npx prisma generate` must be run manually after fresh installs here.
+
+### Still open on this host
+
+- KI-1 unchanged and now broader: **no Rust/Cargo toolchain on the local machine either** — the Anchor program (`program/orzaryn-escrow/src/lib.rs`, 606 lines) remains UNCOMPILED; gate G2 stands.
+- KI-2 partially resolved (see appendix below): RPC read path live-verified; Agent Wallet + webhook secret + real-tx submission still open.
+
+---
+
+## ALCHEMY LIVE VERIFICATION (2026-11-05, Windows host — KI-2 partial resolution)
+
+With an Alchemy API key for app `q15y93g86sfgd0rb` configured (gitignored `.env`, never committed):
+
+- **Cluster correction (defect, fixed):** the adapter targeted `solana-testnet.g.alchemy.com`, a domain that does not exist — Alchemy serves Solana mainnet-beta + devnet only, and the configured USDC mint `4zMMC9…` is Circle's **devnet** USDC (the "testnet" label was a misnomer everywhere). Fixed in `.env` and the `env.ts` defaults; staging now targets **solana-devnet** (faucet-issued asset, no real funds — directive rule 5 preserved).
+- **Live probe (`scripts/alchemy-probe.ts`, read-only):** RPC getHealth ok (2658ms) · getSlot 518725201 (finalized) · jsonParsed token-account read · synthetic getSignatureStatuses → clean NOT_FOUND · webhook verify fails closed without secret. `/api/health` reports `chainMode: live`, chain check `up`.
+- **Escrow submission guard (defect, fixed):** in live mode the escrow/receipt call sites' ASCII descriptor payloads (`escrow-fund:…`) are not Solana transactions; `submitTransaction` now classifies payloads — real transactions go to `sendTransaction` (maxRetries:0, no blind rebroadcast), descriptors fail closed to `LEDGER-ONLY:<descriptor>` references with an explicit "no onchain transaction was sent" note (KI-1 remains the blocker for real escrow). Stage 23 demo re-run in live mode: exit 0, terminal state `COMPLETED/RELEASED/SETTLED` verified, reconciliation 5 checked / 0 mismatches, ledger memos honestly read "live" with LEDGER-ONLY refs.
+- **Stage 23 demo-script integrity defect (found & fixed):** the demo script logged escrow/provider/review transition results **without asserting success** (and logged a hardcoded `firstStatus: 200` for the webhook step). One live-mode run therefore printed a full green report while its work order silently stayed APPROVED/UNFUNDED and the receipts shown were stale from earlier runs — a false green (directive principle 11). Fixed: every step now `mustOk`, failure scenarios assert the expected denial codes (`POLICY_DENIED`, suspended-agent block), a terminal-state assertion verifies the order reached `COMPLETED/RELEASED/SETTLED`, and webhook statuses are captured from real responses.
+- **Gates re-verified after changes:** tsc 0 errors · eslint clean · 16/16 tests · demo exit 0 with terminal assertion.
+- **Remaining under KI-2:** Agent Wallet signing UNVERIFIED (RPC key ≠ Wallet API credentials; separate dashboard setup + probe), `ALCHEMY_WEBHOOK_SECRET` unset (SF-4), real-tx submission unexercised (needs funded devnet transaction + explicit approval), and the RPC key should be **rotated** since it transited an untrusted channel.

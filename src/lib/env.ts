@@ -6,12 +6,13 @@ const schema = z.object({
   SESSION_SECRET: z.string().min(16),
   APP_ENV: z.enum(["development", "staging", "production"]).default("staging"),
   APP_URL: z.string().default("http://localhost:3000"),
-  NETWORK: z.string().default("solana-testnet"),
-  USDC_MINT_TESTNET: z.string().default("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"),
+  // Alchemy serves Solana mainnet-beta + devnet only; devnet USDC (faucet-issued) is the staging asset.
+  NETWORK: z.string().default("solana-devnet"),
+  USDC_MINT_TESTNET: z.string().default("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"), // Circle devnet USDC mint (historical name kept)
   PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(0),
   ALCHEMY_APP_ID: z.string().optional(),
   ALCHEMY_API_KEY: z.string().optional(),
-  ALCHEMY_RPC_HOST: z.string().default("https://solana-testnet.g.alchemy.com/v2"),
+  ALCHEMY_RPC_HOST: z.string().default("https://solana-devnet.g.alchemy.com/v2"),
   ALCHEMY_WEBHOOK_SECRET: z.string().optional(),
   SESSION_TTL_HOURS: z.coerce.number().int().default(24 * 7),
   CHALLENGE_TTL_MINUTES: z.coerce.number().int().default(10),

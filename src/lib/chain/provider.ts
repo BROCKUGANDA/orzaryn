@@ -34,10 +34,13 @@ export interface SignatureStatus {
 }
 
 export interface SubmitResult {
-  /** DEMO:<id> when simulating; real signature when live. */
+  /** DEMO:<id> when simulating; LEDGER-ONLY:<descriptor> when the escrow programme
+   *  is not deployed yet (KI-1/ADR-003); real signature when a live transaction is sent. */
   reference: string;
   mode: "live" | "demo";
   simulated: boolean;
+  /** Present when the result is NOT an onchain confirmation — callers must surface it. */
+  note?: string;
 }
 
 export interface ChainProvider {
