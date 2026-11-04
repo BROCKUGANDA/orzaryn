@@ -1,0 +1,23 @@
+[package]
+name = "orzaryn-escrow"
+version = "0.1.0"
+description = "ORZARYN escrow program — mandate-bounded work-order settlement (STAGING SOURCE, UNCOMPILED — see README)"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "orzaryn_escrow"
+
+[features]
+no-entrypoint = []
+no-idl = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.30.1"
+anchor-spl = "0.30.1"
+spl-token = { version = ">=4", features = ["no-entrypoint"] }
+
+[profile.release]
+overflow-checks = true

@@ -1,0 +1,525 @@
+// ORZARYN — domain schema (Prisma + SQLite; portable to Postgres per ADR-005)
+// Money rule: ALL amounts are BigInt minor units (USDC = 6 decimals). No floats anywhere.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── Identity & access ────────────────────────────────────────────────────────
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  name             String
+  passwordHash     String
+  status           String    @default("ACTIVE") // ACTIVE | LOCKED | DISABLED
+  failedLogins     Int       @default(0)
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  memberships      Membership[]
+  sessions         Session[]
+  walletLinks      WalletLink[]
+  invitationsMade  Invitation[] @relation("InvitationIssuer")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String   @unique // sha256 of opaque token; raw token never stored
+  activeOrgId  String? // current org context
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  ip           String?
+  userAgent    String?
+  @@index([userId])
+}
+
+model WalletLink {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  address       String // base58 pubkey (Solana)
+  label         String?
+  verifiedAt    DateTime
+  createdAt     DateTime  @default(now())
+  @@unique([userId, address])
+  @@index([address])
+}
+
+model AuthChallenge {
+  id          String    @id @default(cuid())
+  nonce       String    @unique
+  domain      String    @default("orzaryn")
+  address     String?
+  purpose     String    @default("WALLET_LINK") // WALLET_LINK | PROVIDER_WALLET | AGENT_SIGNER
+  message     String
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  consumedAt  DateTime?
+}
+
+// ── Organisations ────────────────────────────────────────────────────────────
+
+model Organisation {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  status    String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  memberships Membership[]
+  agents    Agent[]
+  mandates  Mandate[]
+  providers Provider[]
+  invitations Invitation[]
+  workOrders WorkOrder[]
+  treasuryAccounts TreasuryAccount[]
+  ledgerEntries LedgerEntry[]
+  auditLogs AuditLog[]
+}
+
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orgId     String
+  org       Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  role      String // OWNER | ADMIN | TREASURER | APPROVER | OPERATOR | VIEWER
+  createdAt DateTime @default(now())
+  @@unique([userId, orgId])
+  @@index([orgId])
+}
+
+model Invitation {
+  id        String   @id @default(cuid())
+  orgId     String
+  org       Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  email     String
+  role      String
+  tokenHash String   @unique
+  invitedBy String
+  issuer    User     @relation("InvitationIssuer", fields: [invitedBy], references: [id])
+  status    String   @default("PENDING") // PENDING | ACCEPTED | REVOKED | EXPIRED
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  acceptedAt DateTime?
+  @@index([orgId])
+}
+
+// ── Agents ───────────────────────────────────────────────────────────────────
+
+model Agent {
+  id            String   @id @default(cuid())
+  orgId         String
+  org           Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name          String
+  developer     String // developer/engine team label
+  description   String?
+  status        String   @default("REGISTERED") // REGISTERED | ACTIVE | SUSPENDED | REVOKED
+  signerAddress String? // verified authorised wallet/signer (base58)
+  signerVerifiedAt DateTime?
+  statusReason  String?
+  createdBy     String // userId
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  revokedAt     DateTime?
+  apiKeys       ApiKey[]
+  mandates      Mandate[]
+  quotes        Quote[]
+  workOrders    WorkOrder[]
+  @@unique([orgId, name])
+  @@index([status])
+}
+
+model ApiKey {
+  id         String   @id @default(cuid())
+  agentId    String
+  agent      Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  keyId      String   @unique // public identifier, e.g. ozk_...
+  secretHash String // sha256 of secret
+  status     String   @default("ACTIVE") // ACTIVE | REVOKED
+  scopes     String   @default("agent") // comma-separated
+  lastUsedAt DateTime?
+  createdAt  DateTime @default(now())
+  revokedAt  DateTime?
+  @@index([agentId])
+}
+
+// ── Mandates & budgets ───────────────────────────────────────────────────────
+
+model Mandate {
+  id               String   @id @default(cuid())
+  orgId            String
+  org              Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  agentId          String
+  agent            Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  version          Int      @default(1)
+  status           String   @default("ACTIVE") // ACTIVE | EXPIRED | REVOKED
+  // limits — BigInt minor units
+  perPurchaseLimit BigInt
+  dailyLimit       BigInt
+  weeklyLimit      BigInt
+  monthlyLimit     BigInt
+  aggregateBudget  BigInt
+  availableBudget  BigInt // atomically-guarded (conditional decrement, ADR-005)
+  reservedTotal    BigInt   @default(0) // atomically guarded (ADR-005)
+  spentTotal       BigInt   @default(0)
+  maxConcurrent    Int      @default(5) // max concurrent active work orders per agent
+  maxPerHour       Int      @default(10) // velocity cap
+  asset            String   @default("USDC")
+  network          String   @default("solana-testnet")
+  providerAllowlist String  @default("[]") // JSON array of provider ids; empty = all approved
+  serviceCategories String  @default("[]") // JSON array of categories; empty = all
+  approvalThreshold BigInt? // amounts >= require human approval
+  validFrom        DateTime @default(now())
+  validUntil       DateTime
+  termsHash        String // hash of canonical mandate terms
+  createdBy        String
+  revokedAt        DateTime?
+  revokeReason     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  reservations     BudgetReservation[]
+  @@index([agentId, status])
+}
+
+model BudgetReservation {
+  id         String   @id @default(cuid())
+  mandateId  String
+  mandate    Mandate  @relation(fields: [mandateId], references: [id], onDelete: Cascade)
+  workOrderId String? @unique
+  workOrder  WorkOrder? @relation(fields: [workOrderId], references: [id])
+  amount     BigInt
+  status     String   @default("RESERVED") // RESERVED | COMMITTED | RELEASED | EXPIRED
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  @@index([mandateId, status])
+}
+
+// ── Providers & services ─────────────────────────────────────────────────────
+
+model Provider {
+  id            String   @id @default(cuid())
+  orgId         String? // owning org if provider is a member org; null = external
+  org           Organisation? @relation(fields: [orgId], references: [id])
+  name          String
+  description   String?
+  status        String   @default("SUBMITTED") // UNVERIFIED | SUBMITTED | UNDER_REVIEW | APPROVED | SUSPENDED | REJECTED
+  walletAddress String
+  walletVerifiedAt DateTime?
+  contactEmail  String
+  website       String?
+  categories    String   @default("[]")
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  reviewNote    String?
+  submittedBy   String? // userId
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  services      Service[]
+  quotes        Quote[]
+  workOrders    WorkOrder[]
+  @@index([status])
+}
+
+model Service {
+  id          String   @id @default(cuid())
+  providerId  String
+  provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  category    String // DATA | DEVELOPMENT | CONTENT | RESEARCH | INTEGRATION | OPS
+  version     Int      @default(1)
+  status      String   @default("DRAFT") // DRAFT | LISTED | PAUSED
+  pricingModel String  @default("FIXED") // FIXED | QUOTED
+  basePrice   BigInt   @default(0) // minor units; used when FIXED
+  asset       String   @default("USDC")
+  network     String   @default("solana-testnet")
+  slaHours    Int      @default(72) // delivery deadline hours
+  acceptanceTerms String @default("Buyer accepts on evidence review.")
+  termsHash   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  quotes      Quote[]
+  workOrders  WorkOrder[]
+  @@index([providerId, status])
+}
+
+model Quote {
+  id          String   @id @default(cuid())
+  publicId    String   @unique // Q-XXXXXX
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  providerId  String
+  provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  orgId       String
+  agentId     String
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  amount      BigInt
+  asset       String   @default("USDC")
+  network     String   @default("solana-testnet")
+  terms       String // canonical JSON terms
+  termsHash   String
+  status      String   @default("ISSUED") // ISSUED | ACCEPTED | EXPIRED | SUPERSEDED
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  workOrderId String?  @unique
+  createdAt   DateTime @default(now())
+  @@index([agentId, status])
+}
+
+// ── Work orders ──────────────────────────────────────────────────────────────
+
+model WorkOrder {
+  id           String   @id @default(cuid())
+  publicId     String   @unique // WO-2026-XXXXX
+  orgId        String
+  org          Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  agentId      String
+  agent        Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  providerId   String
+  provider     Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  serviceId    String
+  service      Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  quoteId      String?
+  // money (BigInt minor units)
+  amount       BigInt
+  feeAmount    BigInt   @default(0)
+  asset        String   @default("USDC")
+  network      String   @default("solana-testnet")
+  // lifecycle
+  state        String   @default("PENDING_APPROVAL") // PENDING_APPROVAL | APPROVED | REJECTED | FUNDED | ACCEPTED | DELIVERED | IN_REVIEW | COMPLETED | DISPUTED | REFUNDED | CANCELLED
+  approvalStatus String @default("PENDING") // PENDING | APPROVED | REJECTED | NOT_REQUIRED
+  fundingStatus  String @default("UNFUNDED") // UNFUNDED | ESCROWED | RELEASED | REFUNDED
+  evidenceState  String @default("NONE") // NONE | SUBMITTED | IN_REVIEW | ACCEPTED | REJECTED | REVISION_REQUESTED
+  settlementState String @default("NONE") // NONE | PENDING | SETTLED
+  deadline     DateTime
+  terms        String // immutable canonical JSON snapshot of commercial terms
+  termsHash    String
+  autoApproved Boolean  @default(false)
+  cancelReason String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  events       WorkOrderEvent[]
+  evidence     Evidence[]
+  dispute      Dispute?
+  receipts     SettlementReceipt[]
+  ledgerEntries LedgerEntry[]
+  reservation  BudgetReservation?
+  @@index([orgId, state])
+  @@index([providerId, state])
+}
+
+model WorkOrderEvent {
+  id         String   @id @default(cuid())
+  workOrderId String
+  workOrder  WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  seq        Int
+  fromState  String?
+  toState    String?
+  action     String
+  actorType  String // USER | AGENT | PROVIDER | SYSTEM
+  actorId    String
+  reason     String?
+  metadata   String   @default("{}")
+  createdAt  DateTime @default(now())
+  @@unique([workOrderId, seq])
+}
+
+model Evidence {
+  id           String   @id @default(cuid())
+  workOrderId  String
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  version      Int
+  contentHash  String // sha256 of deliverable content
+  storageUri   String // server-side storage path; access-controlled
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+  submittedBy  String // provider principal id
+  status       String   @default("SUBMITTED") // SUBMITTED | IN_REVIEW | ACCEPTED | REJECTED | REVISION_REQUESTED
+  reviewNote   String?
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  createdAt    DateTime @default(now())
+  @@unique([workOrderId, version])
+}
+
+model Dispute {
+  id             String   @id @default(cuid())
+  publicId       String   @unique
+  workOrderId    String   @unique
+  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  reason         String
+  detail         String?
+  openedByType   String // USER | PROVIDER
+  openedBy       String
+  status         String   @default("OPEN") // OPEN | UNDER_REVIEW | RESOLVED_BUYER | RESOLVED_PROVIDER | RESOLVED_SPLIT
+  resolutionNote String?
+  resolvedBy     String?
+  resolvedAt     DateTime?
+  createdAt      DateTime @default(now())
+}
+
+// ── Treasury, ledger, settlement ─────────────────────────────────────────────
+
+model TreasuryAccount {
+  id          String   @id @default(cuid())
+  orgId       String
+  org         Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  label       String
+  address     String
+  asset       String   @default("USDC")
+  network     String   @default("solana-testnet")
+  trackBalance BigInt  @default(0) // ledger-tracked available balance (minor units)
+  createdAt   DateTime @default(now())
+  transactions TreasuryTx[]
+  @@index([orgId])
+}
+
+model TreasuryTx {
+  id          String   @id @default(cuid())
+  accountId   String
+  account     TreasuryAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type        String // DEPOSIT | WITHDRAWAL | ESCROW_IN | ESCROW_RELEASE | REFUND
+  amount      BigInt // signed from account perspective
+  txSignature String? // chain reference or DEMO:<id>
+  status      String   @default("CONFIRMED") // PENDING | CONFIRMED | FAILED
+  sourceType  String   @default("MANUAL")
+  sourceId    String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  @@index([accountId])
+}
+
+model LedgerEntry {
+  id           String   @id @default(cuid())
+  orgId        String
+  org          Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  workOrderId  String?
+  workOrder    WorkOrder? @relation(fields: [workOrderId], references: [id])
+  entryType    String // PROPOSED | RESERVED | ESCROWED | RELEASED | REFUNDED | FEE | PENDING_SETTLEMENT
+  direction    String   @default("DEBIT") // DEBIT | CREDIT
+  account      String // org.treasury | escrow.<woId> | platform.fee | provider.payable
+  amount       BigInt
+  asset        String   @default("USDC")
+  network      String   @default("solana-testnet")
+  sourceType   String // WORK_ORDER | TREASURY_TX | WEBHOOK | ADJUSTMENT
+  sourceId     String
+  idempotencyKey String @unique
+  memo         String?
+  createdAt    DateTime @default(now())
+  @@index([orgId, entryType])
+  @@index([workOrderId])
+}
+
+model SettlementReceipt {
+  id           String   @id @default(cuid())
+  publicId     String   @unique // SR-XXXXXX
+  workOrderId  String
+  workOrder    WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  grossAmount  BigInt
+  feeAmount    BigInt
+  netAmount    BigInt
+  asset        String   @default("USDC")
+  network      String   @default("solana-testnet")
+  kind         String // RELEASE | REFUND
+  chainRef     String? // tx signature or DEMO:<id>
+  createdAt    DateTime @default(now())
+}
+
+// ── Events, reliability, audit ───────────────────────────────────────────────
+
+model WebhookEvent {
+  id           String   @id @default(cuid())
+  source       String   @default("alchemy")
+  externalId   String // provider event id — dedup key
+  signatureValid Boolean @default(false)
+  payload      String
+  status       String   @default("PENDING") // PENDING | PROCESSING | PROCESSED | FAILED | DEAD
+  attempts     Int      @default(0)
+  maxAttempts  Int      @default(5)
+  nextRetryAt  DateTime?
+  lastError    String?
+  receivedAt   DateTime @default(now())
+  processedAt  DateTime?
+  @@unique([source, externalId])
+  @@index([status, nextRetryAt])
+}
+
+model OutboxEvent {
+  id         String   @id @default(cuid())
+  type       String // workorder.created | workorder.funded | ...
+  topic      String   @default("domain")
+  payload    String
+  status     String   @default("PENDING") // PENDING | PUBLISHED | FAILED
+  attempts   Int      @default(0)
+  createdAt  DateTime @default(now())
+  publishedAt DateTime?
+  @@index([status])
+}
+
+model EventCheckpoint {
+  id          String   @id @default(cuid())
+  source      String   @unique // webhook | outbox | sweep | reconcile
+  cursor      String
+  updatedAt   DateTime @updatedAt
+}
+
+model IdempotencyKey {
+  key            String   @id
+  endpoint       String
+  requestHash    String
+  responseStatus Int?
+  responseBody   String?
+  principalId    String
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+  @@index([principalId, endpoint])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  orgId       String?
+  org         Organisation? @relation(fields: [orgId], references: [id])
+  actorType   String // USER | AGENT | PROVIDER | SYSTEM
+  actorId     String
+  action      String
+  resourceType String
+  resourceId  String
+  metadata    String   @default("{}")
+  ip          String?
+  requestId   String?
+  createdAt   DateTime @default(now())
+  @@index([orgId, createdAt])
+}
+
+model ReconciliationRecord {
+  id        String   @id @default(cuid())
+  scope     String // ESCROW_VS_LEDGER | TREASURY_VS_CHAIN | MANDATE_SUMS
+  reference String
+  expected  BigInt
+  observed  BigInt
+  delta     BigInt
+  status    String   @default("MATCH") // MATCH | MISMATCH | UNCHECKED
+  details   String?
+  runAt     DateTime @default(now())
+  @@index([scope, runAt])
+}
+
+model SystemControl {
+  id        String   @id @default("global")
+  paused    Boolean  @default(false)
+  reason    String?
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}

@@ -1,0 +1,30 @@
+{
+  "status": 403,
+  "code": "POLICY_DENIED",
+  "reasonCodes": [
+    "PER_PURCHASE_LIMIT_EXCEEDED",
+    "DAILY_LIMIT_EXCEEDED"
+  ]
+}
+
+[16] Suspended agent's tool call blocked
+{
+  "status": 403,
+  "code": "AGENT_REVOKED",
+  "message": "Agent is SUSPENDED; new purchases are blocked"
+}
+
+[17] Duplicate webhook deduplicated (both persisted-before-ack, single record)
+{
+  "firstStatus": 200,
+  "secondStatus": 200
+}
+
+[18] Treasury after demo flows
+{
+  "treasury": "2140000000",
+  "escrowed": "0",
+  "pending": "240000000"
+}
+
+=== DEMO COMPLETE — all steps above are staging/testnet/DEMO, never real funds ===

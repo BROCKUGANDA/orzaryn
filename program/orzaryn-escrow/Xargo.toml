@@ -1,0 +1,5 @@
+[target.bpfel-unknown-unknown]
+rustflags = ["-C", "lto=no"]
+
+[target.bpfeb-unknown-unknown]
+rustflags = ["-C", "lto=no"]

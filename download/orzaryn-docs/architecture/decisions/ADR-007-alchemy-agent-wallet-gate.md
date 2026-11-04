@@ -1,0 +1,6 @@
+# ADR-007 — Alchemy Agent Wallet capability verification is a hard gate
+
+- **Status:** Open (verification pending) · 2026-11-05
+- **Context:** Stage 12 requires confirmation that Alchemy's Agent Wallet / Wallet API supports: session capabilities, Solana transaction formats, **custom-program instruction compatibility**, signing behaviour, session restrictions/expiry/revocation, sponsorship and network coverage. The approved application id is `q15y93g86sfgd0rb`; no API key material is present in this environment, and the Agent Wallet documentation could not be verified from the sandbox.
+- **Decision:** The application treats Agent Wallet signing as **UNVERIFIED**. The chain adapter exposes capability probing and health checks that report `verified: false` until a configured endpoint answers. The product must not claim Agent Wallet-backed signing until this check passes in staging. If custom Solana program instructions are unsupported, the documented fallback is: buyer-org treasury signing for escrow operations with agent-side actions limited to platform calls (mandate-bounded), which preserves the directive rule "do not give agents unrestricted signer access".
+- **Consequences:** No marketing or UI copy may assert Agent Wallet support; staging demos in DEMO mode must label simulated transactions as such.
