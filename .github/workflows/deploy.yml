@@ -17,7 +17,6 @@ jobs:
   deploy:
     name: build → rsync → restart → health-gate
     runs-on: ubuntu-latest
-    # Skips on PRs; only main (and manual dispatches) deploy.
     if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +27,7 @@ jobs:
           bun-version: latest
 
       - name: Install deps
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build (standalone)
         run: bun run build
@@ -50,19 +49,20 @@ jobs:
           rsync -az --delete \
             --exclude='.git' --exclude='node_modules' --exclude='.next' \
             --exclude='.env' --exclude='db/*.db' --exclude='*.log' \
+            --exclude='*.tgz' \
             -e "ssh -i ~/.ssh/vps -p ${{ secrets.VPS_PORT }}" \
-            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/orzaryn/app/"
+            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/home/ubuntu/orzaryn/"
 
       - name: Activate on VPS
         run: |
           ssh -i ~/.ssh/vps -p "${{ secrets.VPS_PORT }}" \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
             "set -e
-             cd /opt/orzaryn/app
-             bun install --frozen-lockfile
-             bunx prisma db push
-             bunx prisma generate
-             systemctl restart orzaryn"
+             cd /home/ubuntu/orzaryn
+             ~/.bun/bin/bun install
+             ~/.bun/bin/bunx prisma db push
+             ~/.bun/bin/bun run build
+             sudo systemctl restart orzaryn.service"
 
       - name: Health gate (https://orzaryn.svalley.tech/api/health)
         run: |

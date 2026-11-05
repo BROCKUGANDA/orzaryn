@@ -1,268 +1,162 @@
-# DEPLOY.md — ORZARYN on `orzaryn.svalley.tech` (VPS)
+# DEPLOY.md — ORZARYN on `orzaryn.svalley.tech` (VPS 57.130.80.158)
 
-> **Subdomain:** `orzaryn.svalley.tech`
-> **Stack:** Next.js 16 standalone + Bun + Caddy (auto-TLS) + systemd on your VPS
+> **Subdomain:** `orzaryn.svalley.tech` → `57.130.80.158` (the VPS with 22 GB free; Hetzner `135.181.83.101` was 100% full)
+> **Stack:** Next.js 16 standalone + Bun 1.4.2 + Caddy edge (8084/8447) + nginx SNI front door (80/443) + systemd
 > **License:** Apache-2.0 (not MIT)
+> **Live health:** `curl https://orzaryn.svalley.tech/api/health` → `healthy`
 
-This is the single runbook for putting ORZARYN live at **https://orzaryn.svalley.tech**.
-Follow it top-to-bottom on a fresh VPS.
+This is the single runbook for the live deployment. It documents exactly what was deployed.
 
 ---
 
 ## 1. At a glance
 
 ```
-Internet ──HTTPS──▶ Caddy (:443, auto-TLS) ──▶ Next.js standalone (localhost:3000)
-                                                   │
-                                                   ├─ SQLite  /opt/orzaryn/db/custom.db
-                                                   ├─ Alchemy Solana Devnet RPC (USDC)
-                                                   └─ /api/health reflects real status
+Internet ──HTTPS :443──▶ nginx edge-router (SNI map) ──▶ Caddy orz-caddy :8447 (TLS) ──▶ bun :3010
+         ──HTTP  :80 ──▶ nginx (Host map)            ──▶ Caddy :8084 (ACME HTTP-01) ──▶ bun :3010
+                                                                       └─ SQLite /home/ubuntu/orzaryn/db/custom.db
+                                                                       └─ Alchemy Solana Devnet RPC (USDC)
 ```
 
 - **Public URL:** `https://orzaryn.svalley.tech`
-- **Health gate (CI + deploy):** `curl https://orzaryn.svalley.tech/api/health`
-- **App dir on VPS:** `/opt/orzaryn` · **service:** `orzaryn` (systemd) · **logs:** `journalctl -u orzaryn -f`
-- **DB:** SQLite file at `/opt/orzaryn/db/custom.db` (backed up daily — see §7)
+- **Health gate:** `curl https://orzaryn.svalley.tech/api/health`
+- **App dir:** `/home/ubuntu/orzaryn` · **service:** `orzaryn.service` (`PORT=3010`) · **logs:** `/home/ubuntu/orzaryn/logs/server.log`
+- **Edge:** `/home/ubuntu/orzaryn-edge/Caddyfile` · **service:** `orz-caddy.service` (`8084`/`8447`)
+- **Front door maps:** `/home/ubuntu/edge/nginx/edge.d/orzaryn.{sni,host}.map` → reload `edge-router-router-1`
+- **DNS:** Cloudflare zone `svalley.tech` (`71f3763459258a7f0225056de876f113`), A `orzaryn` → `57.130.80.158`, `proxied=false`, TTL 60
 
----
+## 2. DNS (already live)
 
-## 2. DNS (one record)
-
-In your `svalley.tech` zone (Cloudflare / registrar / wherever you manage DNS):
-
-| Type | Name | Value | Notes |
-| --- | --- | --- | --- |
-| A | `orzaryn` | `<VPS-IPv4>` | Proxied (orange cloud) is fine, but set **SSL mode Full (Strict)** if proxied. If you use Let's Encrypt origin certs, keep the origin record grey-cloud. |
-
-Verify:
-
-```bash
-dig +short orzaryn.svalley.tech
-curl -I https://orzaryn.svalley.tech   # 200 once Caddy is live
+```
+A  orzaryn.svalley.tech  -> 57.130.80.158  proxied=false  TTL 60  (id b872b79375a1a400a4d5689dddd8ec94)
 ```
 
-> Optional extras: `www.orzaryn.svalley.tech` → CNAME to `orzaryn.svalley.tech` (Caddyfile already redirects).
+Verify: `dig +short orzaryn.svalley.tech` → `57.130.80.158`. Record must stay `proxied=false` — Cloudflare proxy breaks SNI forwarding to the edge.
 
----
+## 3. VPS — which VPS has space
 
-## 3. VPS bootstrap (Ubuntu 22.04 / 24.04, 2 GB RAM min, 10 GB disk)
+| VPS | Disk | Status |
+| --- | --- | --- |
+| `57.130.80.158` (Akami, `ubuntu@`, `~/.ssh/akami`) | 96G, **22G avail** | ✅ **Chosen** — hosts `astrolabe/crucible/permitzero` already |
+| `135.181.83.101` (Hetzner, `root@`, `~/.ssh/hetzner_hermes`) | 37G, **0 avail (100% full)** | ❌ no space |
+| `5.22.215.51` (UpCloud, `root@`) | — | times out (down) |
 
-Run as root once:
-
-```bash
-apt update && apt install -y curl git ufw fail2ban unattended-upgrades
-ufw allow OpenSSH && ufw allow 'Nginx Full'   # Caddy needs 80+443:
-ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
-
-# Bun
-curl -fsSL https://bun.sh/install | bash
-# make bun available to the service user:
-sudo -u orzaryn bash -lc 'source ~/.bashrc; bun --version'   # (create user first, below)
-
-# System user + dirs
-id orzaryn || useradd -m -s /bin/bash orzaryn
-mkdir -p /opt/orzaryn/db /opt/orzaryn/logs
-chown -R orzaryn:orzaryn /opt/orzaryn
-chmod 750 /opt/orzaryn
-```
-
-Install Caddy (official repo):
+## 4. App definition (live)
 
 ```bash
-apt install -y debian-keyring debian-archive-keyring apt-transport-https
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-  | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-  | tee /etc/apt/sources.list.d/caddy-stable.list
-apt update && apt install -y caddy
+ssh -i ~/.ssh/akami ubuntu@57.130.80.158
+mkdir -p /home/ubuntu/orzaryn/db /home/ubuntu/orzaryn/logs
+# source shipped via `git archive HEAD` (README, LICENSE, DEPLOY, workflows included)
+cd /home/ubuntu/orzaryn
+~/.bun/bin/bun install
+~/.bun/bin/bunx prisma db push && ~/.bun/bin/bunx prisma generate
+~/.bun/bin/bun run build
 ```
 
----
-
-## 4. App definition (first deploy — manual)
-
-```bash
-sudo -u orzaryn bash
-cd /opt/orzaryn
-git clone <your-repo-url> app && cd app
-git checkout main
-cp .env.example .env && nano .env        # fill §6 values, chmod 640
-bun install --frozen-lockfile
-bunx prisma db push
-bunx prisma generate
-bun run build                             # standalone output in .next/standalone
-```
-
-> `bun run build` already copies `/.next/static` and `/public` into the standalone dir (see `package.json`).
-
-### systemd unit — `/etc/systemd/system/orzaryn.service`
+### systemd — `/etc/systemd/system/orzaryn.service`
 
 ```ini
 [Unit]
-Description=ORZARYN (orzaryn.svalley.tech)
+Description=ORZARYN orzaryn.svalley.tech
 After=network.target
-
 [Service]
 Type=simple
-User=orzaryn
-Group=orzaryn
-WorkingDirectory=/opt/orzaryn/app
-EnvironmentFile=/opt/orzaryn/app/.env
-Environment=NODE_ENV=production
-Environment=PORT=3000
+WorkingDirectory=/home/ubuntu/orzaryn
+Environment=PORT=3010
 Environment=HOSTNAME=127.0.0.1
-ExecStart=/usr/local/bin/bun .next/standalone/server.js
+Environment=NODE_ENV=production
+ExecStart=/home/ubuntu/.bun/bin/bun .next/standalone/server.js
 Restart=on-failure
 RestartSec=5
-# Hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=/opt/orzaryn/db /opt/orzaryn/logs /opt/orzaryn/app
-StandardOutput=append:/opt/orzaryn/logs/server.log
-StandardError=append:/opt/orzaryn/logs/server.log
-
+StandardOutput=append:/home/ubuntu/orzaryn/logs/server.log
+StandardError=append:/home/ubuntu/orzaryn/logs/server.log
 [Install]
 WantedBy=multi-user.target
 ```
 
-```bash
-systemctl daemon-reload && systemctl enable --now orzaryn
-systemctl status orzaryn && curl -s http://127.0.0.1:3000/api/health | head -c 400
-```
+`sudo systemctl daemon-reload && sudo systemctl enable --now orzaryn.service`
+Health: `curl -s http://127.0.0.1:3010/api/health` → `{"status":"healthy",...}`
 
-### Caddy — `/etc/caddy/Caddyfile`
+> `DATABASE_URL` must be **absolute** in standalone: `file:/home/ubuntu/orzaryn/db/custom.db` (relative `file:../db/custom.db` fails in standalone with `Error code 14: Unable to open the database file`).
+
+## 5. Edge (TLS) — `/home/ubuntu/orzaryn-edge/Caddyfile`
 
 ```caddy
+{
+	email admin@svalley.tech
+	admin off
+	http_port 8084
+	https_port 8447
+}
 orzaryn.svalley.tech {
-    encode gzip
-    log { output file /var/log/caddy/orzaryn.log format json }
-
-    header {
-        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "SAMEORIGIN"
-        Referrer-Policy "strict-origin-when-cross-origin"
-        -Server
-    }
-
-    reverse_proxy 127.0.0.1:3000 {
-        header_up Host {host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-        header_up X-Real-IP {remote_host}
-    }
-}
-
-www.orzaryn.svalley.tech {
-    redir https://orzaryn.svalley.tech{uri} permanent
+	header { Strict-Transport-Security "..." ... }
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3010 { header_up X-Forwarded-For {remote_host} ... }
 }
 ```
 
-```bash
-caddy validate --config /etc/caddy/Caddyfile
-systemctl reload caddy   # or: caddy reload
-curl -s https://orzaryn.svalley.tech/api/health
+### systemd — `/etc/systemd/system/orz-caddy.service`
+
+```ini
+[Unit]
+Description=ORZARYN Edge Caddy (8084/8447)
+After=network.target orzaryn.service
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/orzaryn-edge
+ExecStart=/usr/bin/caddy run --config /home/ubuntu/orzaryn-edge/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/ubuntu/orzaryn-edge/caddy.log
+StandardError=append:/home/ubuntu/orzaryn-edge/caddy.log
+[Install]
+WantedBy=multi-user.target
 ```
 
-Caddy auto-provisions Let's Encrypt certs on first hit. Keep ports 80/443 open.
+If ACME fails with `502` on the HTTP-01 challenge, the SNI/Host maps weren't loaded yet — restart after adding the maps (below).
 
-> **Sandbox split-port dev:** the repo-root `Caddyfile` also keeps the legacy `:81` handler used by the sandbox gateway (`XTransformPort`). That block is harmless in prod — Caddy ignores it when the hostname sites exist — but you can delete it on the VPS if you want a minimal file. The full prod file above is what `/etc/caddy/Caddyfile` should contain.
+## 6. Front door (nginx SNI)
 
----
+Maps live in the bind-mounted dir `/home/ubuntu/edge/nginx/edge.d/` (the container mounts it `:ro`, so edit the host files, not the container):
 
-## 5. Environment (`.env` on the VPS — never commit)
-
-```bash
-cp .env.example .env
-nano .env
-chmod 640 .env && chown orzaryn:orzaryn .env
+```
+/home/ubuntu/edge/nginx/edge.d/orzaryn.sni.map   :  orzaryn.svalley.tech 127.0.0.1:8447;
+/home/ubuntu/edge/nginx/edge.d/orzaryn.host.map  :  orzaryn.svalley.tech 127.0.0.1:8084;
 ```
 
-| Key | Example | Notes |
-| --- | --- | --- |
-| `DATABASE_URL` | `file:../db/custom.db` | Relative to `prisma/` → `/opt/orzaryn/app/db/custom.db`. Keep as-is or point at `/opt/orzaryn/db/custom.db` for shared volume. |
-| `SESSION_SECRET` | `<64-char random>` | `openssl rand -hex 32`. **Rotate the sandbox placeholder before prod.** |
-| `APP_ENV` | `production` | Set to `production` so cookies are `Secure`. |
-| `APP_URL` | `https://orzaryn.svalley.tech` | Public URL of this subdomain. |
-| `NETWORK` | `solana-devnet` | Solana Devnet (staging). Validator `testnet` has no Alchemy endpoint. |
-| `USDC_MINT_TESTNET` | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` | Circle's **Devnet** USDC (faucet, no real value). |
-| `ALCHEMY_RPC_HOST` | `https://solana-devnet.g.alchemy.com/v2` | Your Alchemy Solana endpoint (key in path or separate header per your plan). |
-| `ALCHEMY_APP_ID` | `q15y93g86sfgd0rb` | From your Alchemy app. |
-| `ALCHEMY_API_KEY` | `alch_…` | Rotate the sandbox value. |
-| `ALCHEMY_WEBHOOK_SECRET` | `<secret>` | **Required** — without it webhooks dead-letter as unverified (SF-4). |
-| `PLATFORM_FEE_BPS` | `0` | Keep `0` until pricing is validated. |
+```bash
+docker exec edge-router-router-1 nginx -t && docker exec edge-router-router-1 nginx -s reload
+```
 
----
+## 7. Environment (`.env` on VPS — never commit)
 
-## 6. CI/CD — GitHub Actions
-
-Two workflows ship with the repo (`.github/workflows/`):
-
-| Workflow | Trigger | What it does |
-| --- | --- | --- |
-| `ci.yml` | every `push` / `pr` | `bun install → lint → tsc --noEmit → build → bun test` |
-| `deploy.yml` | `push` to `main` | build → rsync to VPS (`/opt/orzaryn/app`) → `prisma db push` → `systemctl restart orzaryn` → `/api/health` gate. Fails the pipeline if health is `degraded`. |
-| `security.yml` | weekly + `push` | `bun audit` + secret-scan (gitleaks) |
-
-**Repo secrets to set** (GitHub → Settings → Secrets → Actions):
-
-| Secret | Value |
+| Key | Value (live) |
 | --- | --- |
-| `VPS_HOST` | `orzaryn.svalley.tech` (or VPS IPv4) |
-| `VPS_USER` | `orzaryn` |
-| `VPS_SSH_KEY` | private key for that user (no passphrase) |
-| `VPS_PORT` | `22` (or your custom port) |
+| `DATABASE_URL` | `file:/home/ubuntu/orzaryn/db/custom.db` |
+| `SESSION_SECRET` | `prod_orzaryn_svalley_9f3a8c1e…` (rotate before real money) |
+| `APP_ENV` / `APP_URL` | `production` / `https://orzaryn.svalley.tech` |
+| `NETWORK` / `USDC_MINT_TESTNET` | `solana-devnet` / `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` |
+| `ALCHEMY_*` | `q15y93g86sfgd0rb` / `alch_CxRl…` (rotate before real money) |
+| `PLATFORM_FEE_BPS` | `0` |
 
-Deploy excludes `.env`, `node_modules`, `.next`, `db/*.db` — your VPS `.env` and SQLite DB survive redeploys.
+## 8. CI/CD — GitHub Actions
 
-**First-connection SSH:** add the VPS host key to `known_hosts` in `deploy.yml` (the workflow already runs `ssh-keyscan`).
+`.github/workflows/ci.yml` (lint/typecheck/build/test), `deploy.yml` (rsync → build → `prisma db push` → `systemctl restart orzaryn` → health gate), `security.yml` (audit + gitleaks). For this VPS set secrets: `VPS_HOST=57.130.80.158`, `VPS_USER=ubuntu`, `VPS_SSH_KEY` = `~/.ssh/akami` private key, `VPS_PORT=22`.
 
----
+## 9. Verification checklist
 
-## 7. Backups, updates, rollback
+- [x] `dig +short orzaryn.svalley.tech` → `57.130.80.158`
+- [x] `curl https://orzaryn.svalley.tech/api/health` → `healthy` (live-verified 2026-11-05)
+- [ ] Signup → org → agent → mandate → treasury (testnet) in UI
+- [ ] `POST https://orzaryn.svalley.tech/api/mcp` with `x-orz-key`
+- [x] `systemctl status orzaryn.service orz-caddy.service` → `active (running)`
+
+## 10. Rollback
 
 ```bash
-# DB backup (run daily via cron: 0 3 * * * /opt/orzaryn/scripts/backup-db.sh)
-sqlite3 /opt/orzaryn/db/custom.db ".backup /opt/orzaryn/db/custom-$(date +%F).db"
-
-# Manual redeploy (same as CI):
-cd /opt/orzaryn/app && git pull && bun install --frozen-lockfile && bun run build \
-  && bunx prisma db push && systemctl restart orzaryn
-
-# Rollback:
-git log --oneline -5   # pick previous SHA
-git checkout <sha> && bun install --frozen-lockfile && bun run build \
-  && systemctl restart orzaryn
-
-# Logs / status:
-systemctl status orzaryn
-journalctl -u orzaryn -f
-curl -s https://orzaryn.svalley.tech/api/health | jq .
+sudo systemctl restart orzaryn.service orz-caddy.service
+curl -s http://127.0.0.1:3010/api/health | jq .
+# Logs: /home/ubuntu/orzaryn/logs/server.log  ·  /home/ubuntu/orzaryn-edge/caddy.log
 ```
 
----
-
-## 8. Verification checklist
-
-- [ ] `dig +short orzaryn.svalley.tech` returns the VPS IPv4
-- [ ] `curl -s https://orzaryn.svalley.tech/api/health` → `{"status":"healthy"}` or `healthy-demo`
-- [ ] Signup → create org → create agent → set mandate → fund treasury (testnet) works in the UI
-- [ ] `curl -s https://orzaryn.svalley.tech/api/mcp -H "x-orz-key: ozk_…" -d '{"tool":"inspect_mandate"}'`
-- [ ] TLS on `https://orzaryn.svalley.tech` shows a valid Let's Encrypt cert
-- [ ] `systemctl status orzaryn` is `active (running)` after reboot
-
----
-
-## 9. Hardening before any real money
-
-- [ ] Rotate `SESSION_SECRET` and `ALCHEMY_API_KEY` (sandbox placeholders are in git history).
-- [ ] Set `ALCHEMY_WEBHOOK_SECRET`; confirm a test webhook hits `POST /api/webhooks/alchemy` with `200`.
-- [ ] `APP_ENV=production` + `APP_URL=https://orzaryn.svalley.tech` (Secure cookies).
-- [ ] Compile + audit the Anchor program (`program/orzaryn-escrow/`) — **do not deploy it** until `anchor build`, localnet tests, and review pass.
-- [ ] Legal review of escrow classification (`docs/status/RELEASE_READINESS.md`).
-- [ ] Postgres migration (ADR-005) when SQLite WAL contention shows up.
-
----
-
-*Questions? Health is the source of truth: `GET /api/health`. If it says `degraded`, start with the `checks` payload — it tells you exactly which dependency is down.*
+*Health is source of truth: `GET /api/health`. If `degraded`, read the `checks` payload.*
