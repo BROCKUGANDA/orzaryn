@@ -19,7 +19,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("OrzEscRow11111111111111111111111111111111111");
+declare_id!("orz6kR1WYePo2UgtGSyu98oGe69gk1aspEf79MYLNSz");
 
 #[program]
 pub mod orzaryn_escrow {
@@ -162,7 +162,7 @@ pub mod orzaryn_escrow {
             OrzError::WrongMint
         );
         let org_key = ctx.accounts.organisation.key();
-        let seeds = &[b"treasury".as_ref(), org_key.as_ref(), &[ctx.accounts.treasury.bump]];
+        let seeds = &[b"treasury".as_ref(), org_key.as_ref(), &[ctx.bumps.treasury]];
         let signer = &[&seeds[..]];
         token::transfer(
             CpiContext::new_with_signer(
@@ -203,18 +203,22 @@ pub mod orzaryn_escrow {
 
     /// 9. Buyer acceptance (Stage 13 #9) + 10. Release — ONE-TIME settlement (Stage 13 #10).
     pub fn buyer_accept_and_release(ctx: Context<BuyerRelease>, _work_order_id: u64, fee_bps: u64) -> Result<()> {
-        let w = &mut ctx.accounts.work_order;
-        require!(w.state == WorkOrderState::Delivered, OrzError::InvalidState);
-        require!(!w.released && !w.refunded, OrzError::AlreadySettled);
+        // Read everything through immutable borrows first; the work-order PDA is
+        // the transfer authority, so mutable borrows must wait until transfers are done.
+        require!(ctx.accounts.work_order.state == WorkOrderState::Delivered, OrzError::InvalidState);
+        require!(
+            !ctx.accounts.work_order.released && !ctx.accounts.work_order.refunded,
+            OrzError::AlreadySettled
+        );
         require!(fee_bps <= 1_500, OrzError::FeeTooHigh);
-        let gross = w.amount;
+        let gross = ctx.accounts.work_order.amount;
         let fee = gross.checked_mul(fee_bps).ok_or(OrzError::Overflow)?.checked_div(10_000).ok_or(OrzError::Overflow)?;
         let net = gross.checked_sub(fee).ok_or(OrzError::Overflow)?;
         require!(net > 0, OrzError::NetZero);
 
         let mandate_key = ctx.accounts.mandate.key();
-        let bump = [w.bump];
-        let seeds = &[b"workorder".as_ref(), mandate_key.as_ref(), &w.work_order_id.to_le_bytes(), &bump[..]];
+        let bump = [ctx.accounts.work_order.bump];
+        let seeds = &[b"workorder".as_ref(), mandate_key.as_ref(), &ctx.accounts.work_order.work_order_id.to_le_bytes(), &bump[..]];
         let signer = &[&seeds[..]];
 
         token::transfer(
@@ -243,6 +247,7 @@ pub mod orzaryn_escrow {
                 fee,
             )?;
         }
+        let w = &mut ctx.accounts.work_order;
         w.released = true; // one-time settlement flag
         w.state = WorkOrderState::Released;
         emit!(Released { work_order: w.key(), gross, fee, net });
@@ -251,17 +256,20 @@ pub mod orzaryn_escrow {
 
     /// 11. Refund — requires dispute record or passed deadline; ONE-TIME (Stage 13 #11).
     pub fn refund(ctx: Context<BuyerRelease>, _work_order_id: u64) -> Result<()> {
-        let w = &mut ctx.accounts.work_order;
-        require!(!w.released && !w.refunded, OrzError::AlreadySettled);
+        // Immutable reads first (the work-order PDA signs the transfer below).
         require!(
-            w.state == WorkOrderState::Disputed
-                || Clock::get()?.unix_timestamp > w.delivery_deadline,
+            !ctx.accounts.work_order.released && !ctx.accounts.work_order.refunded,
+            OrzError::AlreadySettled
+        );
+        require!(
+            ctx.accounts.work_order.state == WorkOrderState::Disputed
+                || Clock::get()?.unix_timestamp > ctx.accounts.work_order.delivery_deadline,
             OrzError::RefundRequiresDisputeOrDeadline
         );
 
         let mandate_key = ctx.accounts.mandate.key();
-        let bump = [w.bump];
-        let seeds = &[b"workorder".as_ref(), mandate_key.as_ref(), &w.work_order_id.to_le_bytes(), &bump[..]];
+        let bump = [ctx.accounts.work_order.bump];
+        let seeds = &[b"workorder".as_ref(), mandate_key.as_ref(), &ctx.accounts.work_order.work_order_id.to_le_bytes(), &bump[..]];
         let signer = &[&seeds[..]];
         let amount = ctx.accounts.escrow_token_account.amount;
         require!(amount > 0, OrzError::ZeroAmount);
@@ -277,6 +285,7 @@ pub mod orzaryn_escrow {
             ),
             amount,
         )?;
+        let w = &mut ctx.accounts.work_order;
         w.refunded = true;
         w.state = WorkOrderState::Refunded;
         emit!(Refunded { work_order: w.key(), amount });
@@ -397,6 +406,7 @@ pub struct RegisterOrganisation<'info> {
     pub platform: Account<'info, Platform>,
     #[account(init, payer = buyer_authority, space = 8 + 1 + 32 + 32 + 8 + 8, seeds = [b"org", buyer_authority.key().as_ref(), &org_seed.to_le_bytes()], bump)]
     pub organisation: Account<'info, Organisation>,
+    /// CHECK: treasury PDA, validated by seeds; holds no data (space = 0)
     #[account(init, payer = buyer_authority, space = 0, seeds = [b"treasury", organisation.key().as_ref()], bump)]
     pub treasury: AccountInfo<'info>,
     #[account(mut)]
@@ -449,7 +459,9 @@ pub struct MandateAuth<'info> {
 pub struct CreateWorkOrder<'info> {
     #[account(mut)]
     pub platform: Account<'info, Platform>,
-    #[account(has_one = authority)]
+    // NOTE: no has_one = authority here — the buyer authority is an Option
+    // signer; the above-threshold binding to organisation.authority is enforced
+    // explicitly inside create_work_order.
     pub organisation: Account<'info, Organisation>,
     #[account(has_one = organisation, constraint = !mandate.revoked @ OrzError::MandateRevoked)]
     pub mandate: Account<'info, Mandate>,
@@ -478,10 +490,14 @@ pub struct FundEscrow<'info> {
     /// CHECK: treasury PDA seeds-validated
     #[account(seeds = [b"treasury", organisation.key().as_ref()], bump)]
     pub treasury: AccountInfo<'info>,
-    #[account(mut, token::mint = platform.usdc_mint)]
-    pub treasury_token_account: Account<'info, TokenAccount>,
-    #[account(init_if_needed, payer = buyer_authority, token::mint = platform.usdc_mint, token::authority = work_order, seeds = [b"escrow", work_order.key().as_ref()], bump)]
-    pub escrow_token_account: Account<'info, TokenAccount>,
+    // Token initialization requires the mint as a first-class account
+    // (constrained to the platform's canonical USDC mint).
+    #[account(constraint = usdc_mint.key() == platform.usdc_mint @ OrzError::WrongMint)]
+    pub usdc_mint: Account<'info, Mint>,
+    #[account(mut, token::mint = usdc_mint)]
+    pub treasury_token_account: Box<Account<'info, TokenAccount>>,
+    #[account(init_if_needed, payer = buyer_authority, token::mint = usdc_mint, token::authority = work_order, seeds = [b"escrow", work_order.key().as_ref()], bump)]
+    pub escrow_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut)]
     pub buyer_authority: Signer<'info>,
     pub token_program: Program<'info, Token>,
@@ -495,7 +511,11 @@ pub struct ProviderAction<'info> {
     #[account(has_one = mandate)]
     pub work_order: Account<'info, WorkOrder>,
     pub mandate: Account<'info, Mandate>,
-    #[account(constraint = provider_record.approved @ OrzError::UnauthorizedProvider)]
+    // Approved AND signed by the authority the record was issued to — otherwise
+    // any signer could act for any approved provider record.
+    #[account(constraint = provider_record.approved
+        && provider_record.authority == provider_authority.key()
+        @ OrzError::UnauthorizedProvider)]
     pub provider_record: Account<'info, ProviderRecord>,
     pub provider_authority: Signer<'info>,
 }
@@ -512,13 +532,13 @@ pub struct BuyerRelease<'info> {
     /// CHECK: refund requires dispute record — validated in the instruction
     pub dispute: Option<Account<'info, Dispute>>,
     #[account(mut, token::mint = platform.usdc_mint, token::authority = work_order)]
-    pub escrow_token_account: Account<'info, TokenAccount>,
+    pub escrow_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut, token::mint = platform.usdc_mint)]
-    pub provider_token_account: Account<'info, TokenAccount>,
+    pub provider_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut, token::mint = platform.usdc_mint)]
-    pub fee_token_account: Account<'info, TokenAccount>,
+    pub fee_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut, token::mint = platform.usdc_mint)]
-    pub treasury_token_account: Account<'info, TokenAccount>,
+    pub treasury_token_account: Box<Account<'info, TokenAccount>>,
     #[account(constraint = buyer_authority.key() == organisation.authority @ OrzError::Unauthorized)]
     pub buyer_authority: Signer<'info>,
     pub token_program: Program<'info, Token>,
@@ -532,6 +552,7 @@ pub struct OpenDispute<'info> {
     pub mandate: Account<'info, Mandate>,
     #[account(init, payer = disputer, space = 8 + 32 + 32 + 32 + 1, seeds = [b"dispute", work_order.key().as_ref()], bump)]
     pub dispute: Account<'info, Dispute>,
+    #[account(mut)]
     pub disputer: Signer<'info>,
     pub system_program: Program<'info, System>,
 }

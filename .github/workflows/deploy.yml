@@ -1,0 +1,82 @@
+name: Deploy to VPS (orzaryn.svalley.tech)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Single-flight deploys — never overlap.
+concurrency:
+  group: orzaryn-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: build → rsync → restart → health-gate
+    runs-on: ubuntu-latest
+    # Skips on PRs; only main (and manual dispatches) deploy.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Build (standalone)
+        run: bun run build
+        env:
+          DATABASE_URL: "file:../db/ci.db"
+          SESSION_SECRET: "ci_ephemeral_secret_for_build_only_not_production"
+          APP_ENV: "production"
+          APP_URL: "https://orzaryn.svalley.tech"
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/vps
+          chmod 600 ~/.ssh/vps
+          ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Rsync to VPS (keep .env + DB)
+        run: |
+          rsync -az --delete \
+            --exclude='.git' --exclude='node_modules' --exclude='.next' \
+            --exclude='.env' --exclude='db/*.db' --exclude='*.log' \
+            -e "ssh -i ~/.ssh/vps -p ${{ secrets.VPS_PORT }}" \
+            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/orzaryn/app/"
+
+      - name: Activate on VPS
+        run: |
+          ssh -i ~/.ssh/vps -p "${{ secrets.VPS_PORT }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "set -e
+             cd /opt/orzaryn/app
+             bun install --frozen-lockfile
+             bunx prisma db push
+             bunx prisma generate
+             systemctl restart orzaryn"
+
+      - name: Health gate (https://orzaryn.svalley.tech/api/health)
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            STATUS=$(curl -s https://orzaryn.svalley.tech/api/health | \
+              python3 -c "import sys,json;print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
+            echo "attempt $i → $STATUS"
+            case "$STATUS" in
+              healthy|healthy-demo) echo "✓ healthy"; exit 0 ;;
+            esac
+            sleep 3
+          done
+          echo "✗ health gate failed"; exit 1
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ~/.ssh/vps

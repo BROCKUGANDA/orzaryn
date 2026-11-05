@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: lint · typecheck · build · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      - name: Prisma generate
+        run: bunx prisma generate
+
+      - name: Build (standalone)
+        run: bun run build
+        env:
+          DATABASE_URL: "file:../db/ci.db"
+          SESSION_SECRET: "ci_ephemeral_secret_for_build_only_not_production"
+          APP_ENV: "staging"
+
+      - name: Unit + integration tests
+        run: bun test
+        env:
+          DATABASE_URL: "file:../db/ci-test.db"
+          SESSION_SECRET: "ci_ephemeral_secret_for_tests_only"
+          APP_ENV: "staging"

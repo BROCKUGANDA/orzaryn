@@ -1,3 +1,34 @@
+# Caddy — ORZARYN
+# Prod: orzaryn.svalley.tech  (VPS: /etc/caddy/Caddyfile)
+# Sandbox dev gateway keeps the :81 split-port handler (XTransformPort).
+
+orzaryn.svalley.tech {
+	encode gzip
+	log {
+		output file /var/log/caddy/orzaryn.log format json
+	}
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+}
+
+www.orzaryn.svalley.tech {
+	redir https://orzaryn.svalley.tech{uri} permanent
+}
+
+# ── Sandbox dev gateway (single-port sandbox uses :81 + XTransformPort) ──
 :81 {
 	@transform_port_query {
 		query XTransformPort=*

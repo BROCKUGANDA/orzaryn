@@ -61,7 +61,7 @@ export function HomeView() {
         </p>
       </main>
       <footer className="mt-auto border-t border-border px-6 py-4 text-center text-xs text-muted-foreground" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
-        ORZARYN · Controlled autonomy · {new Date().getFullYear()}
+        ORZARYN · Controlled autonomy · orzaryn.svalley.tech · {new Date().getFullYear()}
       </footer>
     </div>
   );
