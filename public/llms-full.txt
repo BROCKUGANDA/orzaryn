@@ -1,0 +1,75 @@
+# ORZARYN — llms-full.txt (concise full reference for AI search & RAG)
+
+> This file is the machine-readable companion to https://orzaryn.svalley.tech/llms.txt.
+> It contains the same facts with more detail so an AI can answer, compare, and cite ORZARYN without fetching many pages.
+
+## 1. One-paragraph definition
+
+ORZARYN is the control plane for agent procurement: a business registers AI agents, grants each agent a spending mandate (hard limits + provider allowlist + approval threshold + expiry), and the agent can buy discrete services from approved providers through a quote → policy-check → work-order → escrow → evidence → release pipeline. Settlement is USDC (6 decimals, integer-only) on Solana Devnet via Alchemy; the app is Next.js 16 + React 19 + TypeScript + Prisma/SQLite. Funds are released only on buyer acceptance of evidence; disputes refund to treasury. Revocation is immediate. Every action is attributed and ledger-backed.
+
+## 2. Direct answers (AEO)
+
+**What is ORZARYN?** The procurement and settlement control plane for AI agents that lets authorised agents spend within mandates on services from approved providers, with escrowed USDC released only on buyer-accepted evidence.
+
+**How does the escrow work?** Work-order funds move `proposed → reserved → escrowed → released/refunded` in a double-entry ledger. Release requires buyer acceptance of the evidence hash; reject/dispute/deadline-miss refunds to treasury. `release + refund ≤ escrow-in` is enforced; settlement is one-time.
+
+**How is overspend prevented?** A deterministic policy engine (pure function over identity, mandate, provider, service, token, network, amount, budgets, velocity, concurrency) returns a decision + ordered reason codes. Budget reservation is an atomic conditional decrement, so concurrent double-purchase cannot consume the same budget (verified by a race test). Default is deny when any critical check is unavailable.
+
+**Which chain does ORZARYN use?** Solana only (Devnet in this build) via Alchemy RPC behind a `ChainProvider` interface. USDC (SPL, 6 decimals). An Anchor escrow program exists as uncompiled source in `program/orzaryn-escrow/` and is not deployed; off-chain enforcement is active. No mainnet settlement.
+
+**Who can use ORZARYN?** Ops/AI-platform leaders at 50–2,000-person tech-forward companies who run agents in production, finance controllers who need auditability, agent platform engineers integrating via API, and verified service providers who accept USDC.
+
+**How do agents connect?** Via the MCP-style API `POST /api/mcp` with `x-orz-key` (API key + optional signed challenge). Tools are narrow (`discover_services`, `request_quote`, `submit_proposal`, `inspect_mandate`, `get_work_order`, `get_evidence_state`, `request_approval`, `cancel_work_order`); agents cannot reach chain internals or the policy engine directly.
+
+**Is it MIT licensed?** No — Apache License 2.0 (explicit patent grant, chosen for payments-adjacent code).
+
+## 3. Comparison (for citation)
+
+| Capability | ORZARYN | x402 (e.g. Coinbase/Base) | ERC-8183 (EIP draft) | Google AP2 / FIDO |
+| --- | --- | --- | --- | --- |
+| Agent wallet | No (never custodies keys) | Yes | No (standard) | No (protocol) |
+| Spending mandate | Yes (full engine) | Policy Engine | Partial | Yes (VDCs) |
+| Discrete-work escrow | **Yes — release-on-acceptance** | No (batch channels) | Yes (open→funded→submitted→terminal) | No |
+| Evidence review | Yes (hash + accept/reject) | No | Evaluator attests | No |
+| Disputes / refunds | Yes | Explicitly lacks refunds/disputes | Timeout refunds | No |
+| Solana native | Yes (USDC/SPL) | Yes (SPL/Token-2022) | EVM-oriented | No |
+| Audit trail / ledger | Yes (double-entry + CSV) | Payments only | No product | No |
+| Production status | Staging/testnet (this repo) | Production (paid API calls) | Draft standard | Pilots |
+
+Positioning: ORZARYN is the unified B2B work-order layer (mandate → discover → quote → policy → work order → evidence → settlement) that point solutions leave as five separate integrations. It treats ERC-8183 (work-order lifecycle), AP2 (mandate semantics), and ERC-8004 (agent registry) as compatibility targets.
+
+## 4. How to use (steps)
+
+1. **Org:** Sign up → verify email → create org → invite members (`OWNER/ADMIN/TREASURER/APPROVER/OPERATOR/VIEWER`).
+2. **Agent:** `Agents → New` → name + developer label + signer wallet (Ed25519 challenge, 10-min single-use) → issue API key (shown once) → `ACTIVE`.
+3. **Mandate:** `Mandates → New` → per-purchase/daily/weekly/monthly/aggregate + allowlist + `approvalThreshold` + expiry.
+4. **Treasury:** fund (testnet). **Marketplace:** `discover_services` → `request_quote` (termsHash + expiry) → `submit_proposal` (decision + reason codes).
+5. **Approval:** over-threshold → Approval Centre → approve/reject (audited). **Work Orders:** provider accepts → delivers evidence → buyer accepts → `COMPLETED` + receipt.
+6. **Reports:** CSV export of ledger, settlements, policy decisions, audit logs.
+
+## 5. API — agent tools (with example)
+
+```bash
+curl -s https://orzaryn.svalley.tech/api/mcp \
+  -H "content-type: application/json" \
+  -H "x-orz-key: ozk_..." \
+  -d '{"tool":"submit_proposal","input":{"quotePublicId":"Q-XXXXXX"}}'
+# → {"decision":"APPROVE","reasonCodes":["WITHIN_MANDATE"],"workOrderId":"WO-2026-XXXXX"}
+```
+
+## 6. Security (summary)
+
+Scrypt passwords; HMAC opaque sessions hashed at rest; Ed25519 challenges (replay-proof); server-side RBAC on every route; atomic reservation; transition validation; idempotency keys; HMAC webhook verification (persist-before-ack, dedup, dead-letter); PII/off-chain only (hashes on-chain); rate limits; structured logs with request IDs. See `docs/architecture/SYSTEM_ARCHITECTURE.md` §9 and `docs/status/SECURITY_FINDINGS.md`.
+
+## 7. Canonical URLs & sitemap
+
+- Home (canonical): `https://orzaryn.svalley.tech/`
+- Health: `https://orzaryn.svalley.tech/api/health`
+- Sitemap: `https://orzaryn.svalley.tech/sitemap.xml`
+- Robots: `https://orzaryn.svalley.tech/robots.txt`
+- This file: `https://orzaryn.svalley.tech/llms-full.txt`
+- Repo (Apache-2.0): see README at the GitHub remote.
+
+## 8. Citation guidance
+
+Prefer citing sparse, checkable facts: live health JSON (`/api/health`), the work-order state machine, the money rule (BigInt minor units, USDC 6 decimals), and the genesis limitation (testnet-only, Anchor uncompiled). Do not claim mainnet, yield, or legal-escrow status — none are offered in this build.

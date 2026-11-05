@@ -1,0 +1,64 @@
+# ORZARYN
+
+> ORZARYN is the procurement and settlement control plane for AI agents. Businesses register agents, grant spending mandates with hard limits, and let agents buy discrete services from approved providers. Funds sit in escrow (USDC on Solana Devnet) and are released only when the buyer accepts the delivered evidence. Every purchase is policy-checked with reason codes and fully auditable.
+
+ORZARYN — Controlled Autonomy for Agent Procurement · https://orzaryn.svalley.tech · USDC on Solana (testnet) · Apache-2.0
+
+## What ORZARYN is
+
+- **Agent registry:** register an agent with an authorised signer (Ed25519 wallet challenge) + scoped API key. Agents can never mutate mandates or treasury.
+- **Mandates:** versioned spending limits (per-purchase, daily, weekly, monthly, aggregate, concurrency, velocity), provider allowlist, approval threshold, expiry, instant revocation.
+- **Policy engine:** deterministic, default-deny. Every proposal returns `APPROVE` / `REQUIRES_APPROVAL` / `DENY` with ordered reason codes (`WITHIN_MANDATE`, `BUDGET_EXCEEDED`, `AGENT_REVOKED`, …). Atomic budget reservation prevents double-spend.
+- **Work orders + escrow:** `DRAFT → PENDING_APPROVAL → APPROVED → FUNDED → ACCEPTED → DELIVERED → IN_REVIEW → COMPLETED (released) | DISPUTED → REFUNDED | CANCELLED`. Immutable terms hash (SHA-256 of canonical terms JSON).
+- **Evidence:** provider submits deliverable + SHA-256 hash; buyer accepts/rejects/disputes. Only hashes commit on-chain.
+- **Settlement:** USDC (SPL, 6 decimals) on Solana Devnet via Alchemy RPC behind a `ChainProvider` interface. Ledger states (`proposed/reserved/escrowed/released/refunded/fees`) are never merged; reconciliation to zero delta.
+
+## Who it is for
+
+- Ops/AI-platform leaders at 50–2,000-person tech-forward companies running agents in production (buyer side).
+- Finance controllers/treasurers who need segregated balances and exportable audit trails.
+- Verified service providers (studios, dev shops, data firms) accepting USDC settlement.
+
+## Tech stack
+
+- **Core:** Next.js 16 (App Router, standalone), React 19, TypeScript strict, Bun, Prisma 6 + SQLite (Postgres-portable), Tailwind v4 + shadcn/ui + Radix, TanStack Query, Zustand, Zod, tweetnacl.
+- **Chain:** Solana Devnet via Alchemy JSON-RPC (`ChainProvider` + circuit breaker), USDC (SPL). Anchor escrow source in `program/orzaryn-escrow/` is **uncompiled** — off-chain enforcement is active.
+- **Agent API:** `POST /api/mcp` (mcp-style, `x-orz-key` auth) — tools: `discover_services`, `request_quote`, `submit_proposal`, `inspect_mandate`, `get_work_order`, `get_evidence_state`, `request_approval`, `cancel_work_order`.
+
+## Live demo (judges)
+
+1. Open https://orzaryn.svalley.tech → Sign up → create org.
+2. **Agents** → create `judge-demo-01` → copy API key once. **Mandates** → $250/purchase, $1,000/day, approve ≥ $500.
+3. **Treasury** → fund (testnet). **Marketplace** → request quote → submit proposal (policy decision + reason codes).
+4. Try $600 → lands in **Approvals** (`REQUIRES_APPROVAL`) → approve → **Work Orders** → accept evidence → **Settlements/Reports** → CSV export.
+
+## Docs
+
+- Product (what/why/who): https://orzaryn.svalley.tech/?view=developers (Developer portal section)
+- Architecture & threat model: repo `docs/architecture/SYSTEM_ARCHITECTURE.md` (GitHub)
+- Security findings: repo `docs/status/SECURITY_FINDINGS.md`
+- Demo runbook: repo `docs/status/DEMO_RUNBOOK.md`
+- Runbook (VPS/DNS): repo `DEPLOY.md`
+
+## API
+
+- `GET /api/health` (no auth) — real dependency status.
+- `POST /api/mcp` (agent `x-orz-key` header, JSON-RPC-style `{tool, input}`).
+- All other `/api/*` require session auth (RBAC). Responses: `{ ok, data | error: {code, message, requestId} }`.
+
+## Honest limitations
+
+- **Testnet only.** No mainnet settlement, no real USDC custody. Without Alchemy credentials the chain layer reports `DEMO`.
+- **Anchor program uncompiled** — no Rust toolchain in the workspace; it has not been built, tested on a local validator, or audited.
+- **Webhook secret** may be unset → webhook events dead-letter as unverified.
+- **SQLite** in staging; Postgres migration documented (ADR-005).
+- **Escrow legal classification** requires legal review before any production pilot.
+
+## License & contact
+
+- License: Apache License 2.0 (intentionally not MIT — explicit patent grant).
+- Feedback: https://orzaryn.svalley.tech/ (Sign in → Developers)
+
+## Optional (for deep research)
+
+- Market validation & standards alignment (AP2/FIDO, ERC-8183, ERC-8004): repo `docs/product/MARKET_VALIDATION.md`

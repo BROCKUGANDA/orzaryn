@@ -1,0 +1,26 @@
+{
+  "name": "ORZARYN — Controlled Autonomy for Agent Procurement",
+  "short_name": "ORZARYN",
+  "description": "Procurement and settlement control plane for AI agents: spending mandates, escrowed work orders, release-on-acceptance settlement in USDC on Solana.",
+  "id": "/?source=pwa",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["business", "finance", "productivity"],
+  "theme_color": "#070908",
+  "background_color": "#070908",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/favicon.svg", "sizes": "32x32", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Approve purchases", "short_name": "Approvals", "description": "Review agent purchases waiting for human approval", "url": "/?view=approvals" },
+    { "name": "Work orders", "short_name": "Work orders", "description": "Track escrowed work orders", "url": "/?view=workorders" },
+    { "name": "Developers", "short_name": "Developers", "description": "MCP agent API docs and tools", "url": "/?view=developers" }
+  ]
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+  <ShortName>ORZARYN</ShortName>
+  <Description>Search ORZARYN — controlled autonomy for agent procurement (USDC on Solana)</Description>
+  <InputEncoding>UTF-8</InputEncoding>
+  <Image width="16" height="16">https://orzaryn.svalley.tech/favicon.svg</Image>
+  <Url type="text/html" template="https://orzaryn.svalley.tech/?view=developers&amp;q={searchTerms}"/>
+  <Url type="application/x-suggestions+json" template="https://orzaryn.svalley.tech/api/health"/>
+  <SearchForm>https://orzaryn.svalley.tech/?view=developers</SearchForm>
+</OpenSearchDescription>
