@@ -5,6 +5,7 @@
 import { db } from "@/lib/db";
 import { AppError } from "./errors";
 import { sha256 } from "./crypto";
+import { env } from "./env";
 
 export type EntryType = "PROPOSED" | "RESERVED" | "ESCROWED" | "RELEASED" | "REFUNDED" | "FEE" | "PENDING_SETTLEMENT";
 export type Direction = "DEBIT" | "CREDIT";
@@ -43,7 +44,7 @@ export async function post(input: PostInput) {
       account: input.account,
       amount: input.amount,
       asset: input.asset ?? "USDC",
-      network: input.network ?? "solana-testnet",
+      network: input.network ?? env.NETWORK,
       sourceType: input.sourceType,
       sourceId: input.sourceId,
       memo: input.memo,

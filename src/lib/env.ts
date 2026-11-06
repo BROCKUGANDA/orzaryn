@@ -14,6 +14,14 @@ const schema = z.object({
   ALCHEMY_API_KEY: z.string().optional(),
   ALCHEMY_RPC_HOST: z.string().default("https://solana-devnet.g.alchemy.com/v2"),
   ALCHEMY_WEBHOOK_SECRET: z.string().optional(),
+  // Outbox fanout: comma-separated subscriber URLs; HMAC-signed deliveries.
+  // Unset/empty → events stay DB-recorded only (audit/MCP consumers read them).
+  EVENT_WEBHOOK_URLS: z.string().optional(),
+  EVENT_WEBHOOK_SECRET: z
+    .string()
+    .refine((v) => v === undefined || v.length >= 16, "EVENT_WEBHOOK_SECRET must be ≥16 chars")
+    .optional(),
+  OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   SESSION_TTL_HOURS: z.coerce.number().int().default(24 * 7),
   CHALLENGE_TTL_MINUTES: z.coerce.number().int().default(10),
 });

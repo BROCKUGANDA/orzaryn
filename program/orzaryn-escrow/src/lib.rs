@@ -19,7 +19,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("orz6kR1WYePo2UgtGSyu98oGe69gk1aspEf79MYLNSz");
+declare_id!("orZk41HX7uemYZK66UZU6xJeMbeiWdo9Cmb7C8x7kNu");
 
 #[program]
 pub mod orzaryn_escrow {

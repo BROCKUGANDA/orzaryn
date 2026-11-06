@@ -10,7 +10,7 @@ skip-lint = false
 [programs.localnet]
 # This ID is the pubkey of the program keypair at target/deploy/ (vanity-ground,
 # 'orz' prefix). smoke.sh asserts the two agree before testing.
-orzaryn_escrow = "orz6kR1WYePo2UgtGSyu98oGe69gk1aspEf79MYLNSz"
+orzaryn_escrow = "orZk41HX7uemYZK66UZU6xJeMbeiWdo9Cmb7C8x7kNu"
 
 [registry]
 url = "https://api.apr.dev"

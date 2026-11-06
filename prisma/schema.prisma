@@ -175,7 +175,7 @@ model Mandate {
   maxConcurrent    Int      @default(5) // max concurrent active work orders per agent
   maxPerHour       Int      @default(10) // velocity cap
   asset            String   @default("USDC")
-  network          String   @default("solana-testnet")
+  network          String   @default("solana-devnet")
   providerAllowlist String  @default("[]") // JSON array of provider ids; empty = all approved
   serviceCategories String  @default("[]") // JSON array of categories; empty = all
   approvalThreshold BigInt? // amounts >= require human approval
@@ -243,7 +243,7 @@ model Service {
   pricingModel String  @default("FIXED") // FIXED | QUOTED
   basePrice   BigInt   @default(0) // minor units; used when FIXED
   asset       String   @default("USDC")
-  network     String   @default("solana-testnet")
+  network     String   @default("solana-devnet")
   slaHours    Int      @default(72) // delivery deadline hours
   acceptanceTerms String @default("Buyer accepts on evidence review.")
   termsHash   String?
@@ -266,7 +266,7 @@ model Quote {
   agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
   amount      BigInt
   asset       String   @default("USDC")
-  network     String   @default("solana-testnet")
+  network     String   @default("solana-devnet")
   terms       String // canonical JSON terms
   termsHash   String
   status      String   @default("ISSUED") // ISSUED | ACCEPTED | EXPIRED | SUPERSEDED
@@ -295,7 +295,7 @@ model WorkOrder {
   amount       BigInt
   feeAmount    BigInt   @default(0)
   asset        String   @default("USDC")
-  network      String   @default("solana-testnet")
+  network      String   @default("solana-devnet")
   // lifecycle
   state        String   @default("PENDING_APPROVAL") // PENDING_APPROVAL | APPROVED | REJECTED | FUNDED | ACCEPTED | DELIVERED | IN_REVIEW | COMPLETED | DISPUTED | REFUNDED | CANCELLED
   approvalStatus String @default("PENDING") // PENDING | APPROVED | REJECTED | NOT_REQUIRED
@@ -379,7 +379,7 @@ model TreasuryAccount {
   label       String
   address     String
   asset       String   @default("USDC")
-  network     String   @default("solana-testnet")
+  network     String   @default("solana-devnet")
   trackBalance BigInt  @default(0) // ledger-tracked available balance (minor units)
   createdAt   DateTime @default(now())
   transactions TreasuryTx[]
@@ -412,7 +412,7 @@ model LedgerEntry {
   account      String // org.treasury | escrow.<woId> | platform.fee | provider.payable
   amount       BigInt
   asset        String   @default("USDC")
-  network      String   @default("solana-testnet")
+  network      String   @default("solana-devnet")
   sourceType   String // WORK_ORDER | TREASURY_TX | WEBHOOK | ADJUSTMENT
   sourceId     String
   idempotencyKey String @unique
@@ -431,9 +431,10 @@ model SettlementReceipt {
   feeAmount    BigInt
   netAmount    BigInt
   asset        String   @default("USDC")
-  network      String   @default("solana-testnet")
+  network      String   @default("solana-devnet")
   kind         String // RELEASE | REFUND
   chainRef     String? // tx signature or DEMO:<id>
+  confirmedAt  DateTime? // set when an escrow_confirmed webhook matches chainRef
   createdAt    DateTime @default(now())
 }
 
@@ -463,9 +464,11 @@ model OutboxEvent {
   payload    String
   status     String   @default("PENDING") // PENDING | PUBLISHED | FAILED
   attempts   Int      @default(0)
+  nextRetryAt DateTime?
+  lastError  String?
   createdAt  DateTime @default(now())
   publishedAt DateTime?
-  @@index([status])
+  @@index([status, nextRetryAt])
 }
 
 model EventCheckpoint {

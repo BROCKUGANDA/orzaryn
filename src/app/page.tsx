@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { Menu } from "lucide-react";
 import { orzFetch } from "@/lib/client";
+import { LoadingState } from "@/components/orz/primitives";
+import { ViewBoundary } from "@/components/orz/view-boundary";
 import { useApp, hasPermission, type ViewKey, type SessionState } from "@/lib/store";
 import { HomeView, AuthView, OnboardingView } from "@/components/views/public-views";
 import { DashboardView, AgentsView, MandatesView, ProvidersView } from "@/components/views/workspace-views-1";
@@ -120,26 +122,41 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
 function CurrentView() {
   const { view, detailId } = useApp();
+  let rendered: React.ReactNode;
   switch (view) {
-    case "dashboard": return <DashboardView />;
-    case "agents": return <AgentsView />;
-    case "mandates": return <MandatesView />;
-    case "providers": return <ProvidersView />;
-    case "quotes": return <QuotesView />;
-    case "purchase": return <PurchaseView />;
-    case "approvals": return <ApprovalsView />;
-    case "workorders": return <WorkOrdersView />;
-    case "workorder-detail": return detailId ? <WorkOrderDetailView publicId={detailId} /> : <WorkOrdersView />;
-    case "settlements": return <SettlementsView />;
-    case "disputes": return <DisputesView />;
-    case "treasury": return <TreasuryView />;
-    case "reports": return <ReportsView />;
-    case "developers": return <DevelopersView />;
-    case "admin": return <AdminView />;
-    case "onboarding": return <OnboardingView />;
-    case "auth": return <AuthView />;
-    default: return <HomeView />;
+    case "dashboard": rendered = <DashboardView />; break;
+    case "agents": rendered = <AgentsView />; break;
+    case "mandates": rendered = <MandatesView />; break;
+    case "providers": rendered = <ProvidersView />; break;
+    case "quotes": rendered = <QuotesView />; break;
+    case "purchase": rendered = <PurchaseView />; break;
+    case "approvals": rendered = <ApprovalsView />; break;
+    case "workorders": rendered = <WorkOrdersView />; break;
+    case "workorder-detail": rendered = detailId ? <WorkOrderDetailView publicId={detailId} /> : <WorkOrdersView />; break;
+    case "settlements": rendered = <SettlementsView />; break;
+    case "disputes": rendered = <DisputesView />; break;
+    case "treasury": rendered = <TreasuryView />; break;
+    case "reports": rendered = <ReportsView />; break;
+    case "developers": rendered = <DevelopersView />; break;
+    case "admin": rendered = <AdminView />; break;
+    case "onboarding": rendered = <OnboardingView />; break;
+    case "auth": rendered = <AuthView />; break;
+    default: rendered = <HomeView />;
   }
+  return <ViewBoundary key={view} name={view}>{rendered}</ViewBoundary>;
+}
+
+function SessionGate() {
+  return (
+    <div className="min-h-screen">
+      <header className="border-b border-border px-4 py-3">
+        <LogoHorizontal size={24} />
+      </header>
+      <div className="mx-auto max-w-6xl p-4 sm:p-6">
+        <LoadingState label="Restoring session" />
+      </div>
+    </div>
+  );
 }
 
 export default function Page() {
@@ -175,7 +192,9 @@ export default function Page() {
     );
   } else if (authedNoOrg) {
     content = <OnboardingView />;
-  } else if (view === "auth" || (!sessionLoaded && !isPublicView)) {
+  } else if (!sessionLoaded && !isPublicView) {
+    content = <SessionGate />;
+  } else if (view === "auth") {
     content = <AuthView />;
   } else if (isPublicView) {
     content = <HomeView />;

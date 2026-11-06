@@ -60,7 +60,7 @@ describe("policy engine (Stage 9)", () => {
     const r = await evaluatePolicy({
       agentId: f.agent.id, mandateId: f.mandate.id, providerId: f.provider.id, serviceId: f.service.id,
       serviceCategory: f.service.category, serviceStatus: "LISTED", providerStatus: "APPROVED",
-      asset: "USDC", network: "solana-testnet", amountMinor: A(10),
+      asset: "USDC", network: "solana-devnet", amountMinor: A(10),
     });
     expect(r.decision).toBe("APPROVE");
     expect(r.reasonCodes).toContain("WITHIN_MANDATE");
@@ -71,7 +71,7 @@ describe("policy engine (Stage 9)", () => {
     const r = await evaluatePolicy({
       agentId: f.agent.id, mandateId: f.mandate.id, providerId: f.provider.id, serviceId: f.service.id,
       serviceCategory: f.service.category, serviceStatus: "LISTED", providerStatus: "APPROVED",
-      asset: "USDC", network: "solana-testnet", amountMinor: A(50),
+      asset: "USDC", network: "solana-devnet", amountMinor: A(50),
     });
     expect(r.decision).toBe("REQUIRE_APPROVAL");
     expect(r.reasonCodes).toContain("AMOUNT_REQUIRES_APPROVAL");
@@ -82,7 +82,7 @@ describe("policy engine (Stage 9)", () => {
     const r = await evaluatePolicy({
       agentId: f.agent.id, mandateId: f.mandate.id, providerId: f.provider.id, serviceId: f.service.id,
       serviceCategory: f.service.category, serviceStatus: "LISTED", providerStatus: "APPROVED",
-      asset: "USDC", network: "solana-testnet", amountMinor: A(101),
+      asset: "USDC", network: "solana-devnet", amountMinor: A(101),
     });
     expect(r.decision).toBe("DENY");
     expect(r.reasonCodes).toContain("PER_PURCHASE_LIMIT_EXCEEDED");
@@ -94,7 +94,7 @@ describe("policy engine (Stage 9)", () => {
     const r = await evaluatePolicy({
       agentId: f.agent.id, mandateId: f.mandate.id, providerId: f.provider.id, serviceId: f.service.id,
       serviceCategory: f.service.category, serviceStatus: "LISTED", providerStatus: "APPROVED",
-      asset: "USDC", network: "solana-testnet", amountMinor: A(10),
+      asset: "USDC", network: "solana-devnet", amountMinor: A(10),
     });
     await db.agent.update({ where: { id: f.agent.id }, data: { status: "ACTIVE" } });
     expect(r.decision).toBe("DENY");
@@ -106,7 +106,7 @@ describe("policy engine (Stage 9)", () => {
     const r = await evaluatePolicy({
       agentId: f.agent.id, mandateId: f.mandate.id, providerId: f.provider.id, serviceId: f.service.id,
       serviceCategory: f.service.category, serviceStatus: "LISTED", providerStatus: "SUSPENDED",
-      asset: "USDC", network: "solana-testnet", amountMinor: A(10),
+      asset: "USDC", network: "solana-devnet", amountMinor: A(10),
     });
     expect(r.decision).toBe("DENY");
     expect(r.reasonCodes).toContain("PROVIDER_NOT_APPROVED");

@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { canonicalJson, sha256 } from "@/lib/crypto";
 import { parseToMinor } from "@/lib/money";
+import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,7 @@ export const POST = api(async (ctx) => {
     agentId: agent.id, perPurchaseLimit: perPurchase.toString(), dailyLimit: daily.toString(),
     weeklyLimit: weekly.toString(), monthlyLimit: monthly.toString(), aggregateBudget: aggregate.toString(),
     providerAllowlist: d.providerAllowlist, serviceCategories: d.serviceCategories,
-    asset: "USDC", network: "solana-testnet", validDays: d.validDays,
+    asset: "USDC", network: env.NETWORK, validDays: d.validDays,
   });
   const mandate = await db.mandate.create({
     data: {

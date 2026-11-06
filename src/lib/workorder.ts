@@ -8,7 +8,7 @@ import { audit } from "./audit";
 import { canonicalJson, sha256 } from "./crypto";
 import { post, ledgerIdempotencyKey, escrowInvariant } from "./ledger";
 import { evaluatePolicy, reserveBudget, commitReservation, releaseReservation } from "./policy";
-import { publishToOutbox } from "./events";
+import { publishToOutbox, stampReceiptIfConfirmed } from "./events";
 import { getChainProvider } from "./chain/alchemy-solana";
 import { env } from "./env";
 import { woPublicId, receiptPublicId, disputePublicId } from "./ids";
@@ -445,6 +445,7 @@ export async function transitionWorkOrder(opts: {
           asset: wo.asset, network: wo.network, kind: "RELEASE", chainRef: submit.reference,
         },
       });
+      await stampReceiptIfConfirmed(receipt.id, submit.reference);
       const updated = await db.workOrder.update({
         where: { id: wo.id },
         data: { state: "COMPLETED", evidenceState: "ACCEPTED", settlementState: "SETTLED" },
@@ -528,6 +529,7 @@ export async function transitionWorkOrder(opts: {
           asset: wo.asset, network: wo.network, kind: "REFUND", chainRef: submit.reference,
         },
       });
+      await stampReceiptIfConfirmed(receipt.id, submit.reference);
       const updated = await db.workOrder.update({
         where: { id: wo.id },
         data: { state: "REFUNDED", settlementState: "SETTLED" },

@@ -41,7 +41,7 @@ export const metadata: Metadata = {
     canonical: "/",
     languages: { en: "/" },
     types: {
-      "text/plain": ["/llms.txt", "/llms-full.txt"],
+      "text/plain": [{ url: "/llms.txt" }, { url: "/llms-full.txt" }],
     },
   },
   manifest: "/manifest.webmanifest",
@@ -80,9 +80,9 @@ export const metadata: Metadata = {
     googleBot: {
       index: true,
       follow: true,
-      maxVideoPreview: -1,
-      maxImagePreview: "large",
-      maxSnippet: -1,
+      "max-video-preview": -1,
+      "max-image-preview": "large",
+      "max-snippet": -1,
     },
   },
   verification: {
@@ -98,6 +98,8 @@ export const metadata: Metadata = {
     "article:publisher": siteUrl,
   },
 };
+
+export const dynamic = "force-dynamic";
 
 export const viewport: Viewport = {
   themeColor: "#070908",

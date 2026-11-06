@@ -8,6 +8,7 @@ import { audit } from "@/lib/audit";
 import { parseToMinor, formatFromMinor } from "@/lib/money";
 import { post, ledgerIdempotencyKey } from "@/lib/ledger";
 import { getChainProvider } from "@/lib/chain/alchemy-solana";
+import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -61,7 +62,7 @@ export const POST = api(async (ctx) => {
         label: acct.data.label,
         address: acct.data.address,
         asset: "USDC",
-        network: "solana-testnet",
+        network: env.NETWORK,
       },
     });
     await audit({ orgId: p.orgId, actorType: "USER", actorId: p.userId, action: "treasury.account_created", resourceType: "treasury_account", resourceId: account.id, requestId: ctx.requestId });

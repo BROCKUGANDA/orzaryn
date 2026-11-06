@@ -2,10 +2,12 @@
 // Webhook ingest: verify → persist-before-ack → dedup. Worker: transactional
 // claims, idempotent processing, exponential backoff, dead-letter, checkpoints.
 // Sweeps: reservation expiry, quote expiry. Reconciliation: ledger vs mandates.
+import { createHmac } from "node:crypto";
 import { db } from "@/lib/db";
 import { logger } from "./logger";
 import { releaseReservation } from "./policy";
 import { escrowInvariant } from "./ledger";
+import { env } from "./env";
 
 const log = logger("events");
 
@@ -68,10 +70,13 @@ async function processWebhookEvent(id: string): Promise<void> {
       data: { status: "CONFIRMED" },
     });
   } else if (payload.type === "escrow_confirmed" && payload.reference) {
-    await db.settlementReceipt.updateMany({
-      where: { chainRef: payload.reference },
-      data: {},
-    }); // receipts are created after finality; reference exists for probing
+    // Finality confirmation: stamp the settlement receipt whose onchain
+    // reference matches. Idempotent — only unconfirmed receipts are updated.
+    const r = await db.settlementReceipt.updateMany({
+      where: { chainRef: payload.reference, confirmedAt: null },
+      data: { confirmedAt: new Date() },
+    });
+    log.info("webhook.escrow_confirmed", { reference: payload.reference, updated: r.count });
   } else if (payload.type === "program_log") {
     // persisted for reconciliation; no state change
   } else {
@@ -123,15 +128,134 @@ export async function processInboxOnce(): Promise<{ processed: number; failed: n
   return { processed, failed };
 }
 
-export async function publishOutboxOnce(): Promise<{ published: number }> {
-  const pending = await db.outboxEvent.findMany({ where: { status: "PENDING" }, take: 20, orderBy: { createdAt: "asc" } });
+/**
+ * Ordering tolerance for settlement finality: a chain confirmation webhook can
+ * arrive before the settlement receipt exists (receipts are written after
+ * finality). When a receipt is later created for a reference that was already
+ * confirmed, this stamps it immediately instead of leaving it unconfirmed.
+ */
+export async function stampReceiptIfConfirmed(receiptId: string, chainRef: string | null): Promise<void> {
+  if (!chainRef) return;
+  const candidates = await db.webhookEvent.findMany({
+    where: { source: "alchemy", status: "PROCESSED", payload: { contains: chainRef } },
+    take: 10,
+  });
+  const confirmed = candidates.some((c) => {
+    try {
+      const p = JSON.parse(c.payload) as { type?: string; reference?: string };
+      return p.type === "escrow_confirmed" && p.reference === chainRef;
+    } catch {
+      return false;
+    }
+  });
+  if (!confirmed) return;
+  await db.settlementReceipt.updateMany({
+    where: { id: receiptId, chainRef, confirmedAt: null },
+    data: { confirmedAt: new Date() },
+  });
+  log.info("receipt.backstamped_from_webhook", { receiptId, chainRef });
+}
+
+// ── outbox fanout (Stage 24) ─────────────────────────────────────────────────
+
+/** Configured subscriber URLs (EVENT_WEBHOOK_URLS, comma-separated). */
+export function outboxSubscribers(): string[] {
+  return (env.EVENT_WEBHOOK_URLS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** HMAC-SHA256 over the exact delivery body; subscribers verify before trusting. */
+export function signOutboxPayload(body: string): string {
+  if (!env.EVENT_WEBHOOK_SECRET) throw new Error("EVENT_WEBHOOK_SECRET not configured");
+  return createHmac("sha256", env.EVENT_WEBHOOK_SECRET).update(body).digest("hex");
+}
+
+/** Deliver one outbox event to every subscriber; resolves only if ALL accept (2xx). */
+async function deliverOutboxEvent(evt: { id: string; type: string; topic: string; payload: string; createdAt: Date }): Promise<void> {
+  const body = JSON.stringify({
+    id: evt.id,
+    type: evt.type,
+    topic: evt.topic,
+    payload: JSON.parse(evt.payload) as Record<string, unknown>,
+    createdAt: evt.createdAt.toISOString(),
+  });
+  const signature = signOutboxPayload(body);
+  await Promise.all(
+    outboxSubscribers().map(async (url) => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-orzaryn-signature": signature,
+          "x-orzaryn-event-id": evt.id,
+        },
+        body,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) throw new Error(`subscriber_http_${res.status}:${new URL(url).host}`);
+    }),
+  );
+}
+
+export async function publishOutboxOnce(): Promise<{ published: number; failed: number }> {
+  const subscribers = outboxSubscribers();
+  const now = new Date();
+  const pending = await db.outboxEvent.findMany({
+    where: {
+      status: "PENDING",
+      OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
+    },
+    take: 20,
+    orderBy: { createdAt: "asc" },
+  });
   let published = 0;
+  let failed = 0;
   for (const evt of pending) {
-    // Single-process publisher; subscriber list is pluggable (webhook fanout deferred).
-    const r = await db.outboxEvent.updateMany({ where: { id: evt.id, status: "PENDING" }, data: { status: "PUBLISHED", publishedAt: new Date() } });
-    published += r.count;
+    // Transactional claim: only one worker instance may attempt delivery.
+    const claimed = await db.outboxEvent.updateMany({
+      where: { id: evt.id, status: "PENDING" },
+      data: { attempts: { increment: 1 } },
+    });
+    if (claimed.count !== 1) continue;
+
+    if (subscribers.length === 0) {
+      // No external subscribers: the DB row itself is the durable event record
+      // (audit and MCP consumers read it directly) — marking recorded is final.
+      await db.outboxEvent.update({
+        where: { id: evt.id },
+        data: { status: "PUBLISHED", publishedAt: new Date() },
+      });
+      published++;
+      continue;
+    }
+
+    const attempts = evt.attempts + 1;
+    try {
+      await deliverOutboxEvent(evt);
+      await db.outboxEvent.update({
+        where: { id: evt.id },
+        data: { status: "PUBLISHED", publishedAt: new Date(), lastError: null },
+      });
+      published++;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "unknown";
+      const dead = attempts >= env.OUTBOX_MAX_ATTEMPTS;
+      const backoffMs = Math.min(60_000, 1_000 * 2 ** attempts) * Math.random(); // full jitter
+      await db.outboxEvent.update({
+        where: { id: evt.id },
+        data: {
+          status: dead ? "FAILED" : "PENDING",
+          lastError: msg,
+          nextRetryAt: dead ? null : new Date(Date.now() + backoffMs),
+        },
+      });
+      failed++;
+      log.warn("outbox.delivery_failed", { id: evt.id, type: evt.type, attempts, dead, error: msg });
+    }
   }
-  return { published };
+  return { published, failed };
 }
 
 // ── sweeps ───────────────────────────────────────────────────────────────────
