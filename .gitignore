@@ -65,3 +65,7 @@ scripts/video/*.wav
 !scripts/video/orzaryn-demo.mp4
 scripts/video/*.png
 scripts/video/concat.txt
+
+# video tooling scratch
+.video_agent/
+cfr-Scenes.csv
