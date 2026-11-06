@@ -57,3 +57,11 @@ program/orzaryn-escrow/target/
 
 # local database & evidence — staging data never leaves this machine
 /db/
+
+# video pipeline intermediates (final mp4 is committed)
+scripts/video/raw/
+scripts/video/*.mp4
+scripts/video/*.wav
+!scripts/video/orzaryn-demo.mp4
+scripts/video/*.png
+scripts/video/concat.txt

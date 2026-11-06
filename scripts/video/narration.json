@@ -1,0 +1,12 @@
+{
+ "s01_landing": "ORZARYN gives AI agents the one thing raw autonomy never had: authority with limits, and settlements you can prove.",
+ "s02_auth": "Every session starts with signed, expiring credentials. No shared keys. No shadow admin.",
+ "s03_dashboard": "The console shows live system health \u2014 real RPC, real worker, real database. Every number on this screen comes from the running system.",
+ "s04_mandates": "Mandates are the control surface: per-purchase, daily, weekly, and aggregate limits, enforced before any purchase executes.",
+ "s05_agents": "Each agent gets scoped API credentials, bound to its mandate. Agents can act \u2014 only inside the fence.",
+ "s06_workorders": "A purchase becomes a work order with a full state machine: approval, funding, delivery, evidence, and review. Nothing skips a step.",
+ "s07_settle": "Settlement produces receipts with on-chain references. Escrow releases only after evidence review.",
+ "s08_treasury": "The treasury tracks every escrowed, released, and refunded dollar \u2014 double-entry, idempotent, reconciled.",
+ "s09_reports": "And reports keep the whole organization accountable, with analytics over real activity.",
+ "s10_close": "ORZARYN. Authority, bounded. Settlement, proven."
+}
