@@ -2,6 +2,11 @@
 # 124 BPM so the beat grid is exact and scene cuts can land ON beats.
 # Minimal electronic bed: kick / hats / sub bass / soft pad. CC0-equivalent
 # (generated here, no third-party rights).
+import sys
+
+BARS_ARG = int(sys.argv[1]) if len(sys.argv) > 1 else None
+BREAK_ARG = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else None
+
 import numpy as np
 import wave
 
@@ -9,7 +14,7 @@ SR = 44100
 BPM = 124.0
 BEAT = 60.0 / BPM            # 0.48387s
 BAR = 4 * BEAT               # 1.93548s
-BARS = 54                    # 54 bars ≈ 1:45 (edit length)
+BARS = BARS_ARG or 54                    # 54 bars ≈ 1:45 (edit length)
 N = int(BARS * BAR * SR)
 t_all = np.arange(N) / SR
 
@@ -60,7 +65,7 @@ progression = [A1, F2, C2, G2]  # per-bar roots
 for bar in range(BARS):
     bt0 = bar * BAR
     root = progression[bar % 4]
-    section = "intro" if bar < 4 else "out" if bar >= BARS - 6 else "break" if 33 <= bar < 37 else "main"
+    section = "intro" if bar < 4 else "out" if bar >= BARS - 6 else "break" if (BREAK_ARG[0] <= bar < BREAK_ARG[1] if BREAK_ARG else 33 <= bar < 37) else "main"
 
     for b in range(4):
         tb = bt0 + b * BEAT
